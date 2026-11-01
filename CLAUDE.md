@@ -16,6 +16,7 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - `src/servidor.ts`: o "cérebro" HTTP + SSE. Interfaces só se conectam a ele.
 - `src/escritorio.ts`: projeto (repo git) + mesas. Cada mesa é um git worktree em `<projeto>.mesas/<funcionario>`, branch `mesa/<funcionario>`.
 - `src/demo.ts`: demo de uma sessão sem servidor.
+- `web/`: a tela (canvas + painel), JS puro sem build, servida pelo cérebro. `web/comportamento.js` é a única tabela evento → comportamento (lógica pura, testável no Node); `web/jogo.js` desenha e cuida do painel.
 - `src/demo-equipe.ts`: três funcionários em paralelo, cada um na sua mesa, com verificação no git (é o teste de ponta a ponta da etapa 2).
 
 ## Convenções
