@@ -4,7 +4,20 @@ Um escritório em pixel art onde funcionários de IA trabalham de verdade: por t
 
 ![O escritório: Bruno foi até a mesa do chefe pedir permissão](docs/tela.png)
 
-## Como usar
+## Instalar no Fedora
+
+1. Baixe o `.rpm` da [última versão](https://github.com/cronistc/murphy/releases/latest).
+2. Instale (ou dê dois cliques no arquivo):
+   ```bash
+   sudo dnf install ./escritorio-pixel-*.x86_64.rpm
+   ```
+3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez, clique em **Entrar com a conta Claude** (assinatura Pro ou Max).
+
+O pacote já traz o Claude Code; o `dnf` instala o resto (Node.js, git, GTK, WebKit). Fechar a janela desliga o escritório e os funcionários. Os projetos ficam em `~/escritorio-projetos`; o log do cérebro em `~/.local/share/escritorio-pixel/`.
+
+Para gerar o pacote: `npm run rpm` (precisa de `rpmbuild`).
+
+## Rodar pelo código-fonte
 
 Precisa de: [Node.js](https://nodejs.org) 22.18 ou mais novo, git, e o [Claude Code](https://claude.com/claude-code) instalado e logado na sua conta (rode `claude` uma vez e faça login).
 

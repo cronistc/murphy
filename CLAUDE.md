@@ -17,6 +17,8 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - `src/escritorio.ts`: projeto (repo git) + mesas. Cada mesa é um git worktree em `<projeto>.mesas/<funcionario>`, branch `mesa/<funcionario>`.
 - `src/demo.ts`: demo de uma sessão sem servidor.
 - `web/`: a tela (canvas + painel), JS puro sem build, servida pelo cérebro. `web/comportamento.js` é a única tabela evento → comportamento (lógica pura, testável no Node); `web/jogo.js` desenha e cuida do painel.
+- `src/conta.ts`: login na conta Claude pelo `claude auth login` oficial (embutido no SDK), rodado num pty (`script`) para aceitar o código colado na tela.
+- `empacotar/`: pacote do Fedora. `escritorio-pixel` é a janela (Python + GTK4 + WebKitGTK 6) que liga o cérebro numa porta livre e o desliga ao fechar (inclusive se a janela morrer: PR_SET_PDEATHSIG). `construir-rpm.sh` gera `build/*.rpm` (`npm run rpm`).
 - `src/demo-equipe.ts`: três funcionários em paralelo, cada um na sua mesa, com verificação no git (é o teste de ponta a ponta da etapa 2).
 
 ## Convenções
@@ -26,4 +28,5 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - Pastas de projeto dos funcionários ficam FORA deste repositório (padrão: `~/escritorio-projetos`), senão herdam o package.json daqui.
 - Segurança: nenhuma ferramenta age fora da pasta do projeto (`caminhoForaDaPasta` + `blockedPath` da CLI), mesmo com aprovação automática.
 - `Escritorio.abrir` nunca roda `git init` em pasta com arquivos, na home ou na raiz do sistema.
+- O pacote não pode passar por `strip`: o Claude Code embutido é um executável único e quebra (o spec desliga isso).
 - Sessões de funcionários rodam com `ambienteLimpo()`: sem as variáveis de identidade de uma sessão do Claude Code que tenha iniciado o cérebro (senão todos herdam o session_id dela).

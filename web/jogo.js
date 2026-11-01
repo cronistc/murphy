@@ -799,7 +799,55 @@ document.querySelector('aside').addEventListener('toggle', (e) => {
   else abertos.delete(n);
 }, true);
 
+// ---------- login na conta Claude ----------
+let verificandoConta = null;
+async function verificarConta() {
+  try {
+    const c = await api('GET', '/conta');
+    $('#login').hidden = c.logado;
+    if (c.logado && verificandoConta) {
+      clearInterval(verificandoConta);
+      verificandoConta = null;
+    }
+    if (!c.logado && !verificandoConta) verificandoConta = setInterval(verificarConta, 3000);
+  } catch {}
+}
+$('#btnEntrar').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  $('#loginErro').textContent = '';
+  try {
+    const r = await api('POST', '/conta/entrar');
+    if (!r.url) throw new Error(r.saida?.trim() || 'o Claude Code não respondeu');
+    $('#loginLink').href = r.url;
+    $('#loginPasso1').hidden = true;
+    $('#loginPasso2').hidden = false;
+    $('#fCodigo').focus();
+  } catch (err) {
+    $('#loginErro').textContent = err.message;
+  } finally {
+    e.target.disabled = false;
+  }
+});
+$('#formCodigo').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const botao = e.submitter;
+  botao.disabled = true;
+  $('#loginErro').textContent = '';
+  try {
+    const r = await api('POST', '/conta/codigo', { codigo: $('#fCodigo').value });
+    if (r.logado) $('#login').hidden = true;
+    else $('#loginErro').textContent = r.saida || 'não deu certo; tente de novo';
+  } catch (err) {
+    $('#loginErro').textContent = err.message;
+    $('#loginPasso1').hidden = false;
+    $('#loginPasso2').hidden = true;
+  } finally {
+    botao.disabled = false;
+  }
+});
+
 // ---------- início ----------
+verificarConta();
 redimensionar();
 api('GET', '/config')
   .then((c) => {

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Escritório Pixel
+GenericName=Escritório de IA
+Comment=Seu escritório em pixel art com funcionários de IA que trabalham de verdade
+Exec=escritorio-pixel
+Icon=io.github.cronistc.EscritorioPixel
+Terminal=false
+Categories=Development;
+Keywords=claude;ia;ai;escritorio;pixel;
+StartupNotify=true
+StartupWMClass=io.github.cronistc.EscritorioPixel

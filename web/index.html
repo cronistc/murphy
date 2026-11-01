@@ -57,6 +57,14 @@
   #ficha dt { color: var(--suave); } #ficha dd { margin: 0; word-break: break-all; }
   #ficha .feed { max-height: 320px; overflow-y: auto; }
   #atividade .feed { max-height: 260px; overflow-y: auto; }
+  #login { position: fixed; inset: 0; background: #17141cf2; display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  #login[hidden] { display: none; }
+  #login .cartao { background: var(--painel); border: 1px solid var(--borda); border-radius: 12px; padding: 24px; max-width: 440px; width: 100%; }
+  #login h1 { font-size: 20px; margin-bottom: 8px; }
+  #login p { color: var(--suave); margin: 8px 0; }
+  #login button { width: 100%; margin-top: 12px; padding: 11px; }
+  #login a { color: var(--destaque); word-break: break-all; }
+  #loginErro { color: var(--perigo); font-size: 13px; min-height: 1em; margin-top: 8px; }
   @media (max-width: 860px) {
     body { flex-direction: column; }
     aside { width: 100%; height: auto; position: static; border-left: 0; border-top: 1px solid var(--borda); }
@@ -117,6 +125,24 @@
     <div class="feed" id="feed"></div>
   </section>
 </aside>
+<div id="login" hidden>
+  <div class="cartao">
+    <h1>🏢 Bem-vindo ao seu escritório</h1>
+    <p>Seus funcionários trabalham com a sua conta Claude (assinatura Pro ou Max). Entre uma vez e pronto.</p>
+    <div id="loginPasso1">
+      <button id="btnEntrar">Entrar com a conta Claude</button>
+    </div>
+    <div id="loginPasso2" hidden>
+      <p>Abrimos o login no seu navegador. Se ele não abriu, <a id="loginLink" href="#" target="_blank" rel="noopener">clique aqui</a>.</p>
+      <p>Se o site mostrar um código, cole aqui:</p>
+      <form id="formCodigo">
+        <input id="fCodigo" autocomplete="off" placeholder="código">
+        <button type="submit">Confirmar</button>
+      </form>
+    </div>
+    <div id="loginErro"></div>
+  </div>
+</div>
 <script type="module" src="jogo.js"></script>
 </body>
 </html>
