@@ -26,7 +26,7 @@ export function formatar(ev: Evento): string {
   let corpo: string;
   switch (ev.tipo) {
     case 'sessao_iniciada':
-      corpo = `modelo=${ev.modelo} pasta=${ev.pasta} tarefa="${encurtar(ev.tarefa, 80)}"`;
+      corpo = `${ev.funcionario ? `${ev.funcionario} (${ev.branch}) ` : ''}modelo=${ev.modelo} pasta=${ev.pasta} tarefa="${encurtar(ev.tarefa, 80)}"`;
       break;
     case 'cli_pronta':
       corpo = `session_id=${ev.sessionIdCli} modelo=${ev.modelo} ferramentas=${ev.ferramentas}`;

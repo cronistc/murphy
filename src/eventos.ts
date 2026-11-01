@@ -9,7 +9,14 @@ export type EventoBase = {
 
 export type Evento = EventoBase &
   (
-    | { tipo: 'sessao_iniciada'; pasta: string; modelo: string; tarefa: string }
+    | {
+        tipo: 'sessao_iniciada';
+        pasta: string;
+        modelo: string;
+        tarefa: string;
+        funcionario?: string;
+        branch?: string;
+      }
     | { tipo: 'cli_pronta'; sessionIdCli: string; modelo: string; ferramentas: number }
     | { tipo: 'texto'; texto: string }
     | { tipo: 'ferramenta_chamada'; idChamada: string; ferramenta: string; resumo: string }

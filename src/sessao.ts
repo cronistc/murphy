@@ -24,6 +24,9 @@ export type OpcoesSessao = {
   // a regra de segurança: nada fora da pasta do projeto.
   decidirPermissao: (pedido: PedidoPermissao) => Promise<Decisao>;
   executavelClaude?: string;
+  funcionario?: string; // quem está sentado nesta mesa
+  branch?: string; // branch git da mesa (worktree)
+  instrucoes?: string; // anexado ao system prompt do Claude Code
 };
 
 // Emite: 'evento' (Evento normalizado) e 'bruto' (mensagem original do SDK).
@@ -48,8 +51,8 @@ export class Sessao extends EventEmitter {
   }
 
   async rodar(): Promise<void> {
-    const { pasta, tarefa, modelo = 'sonnet' } = this.opcoes;
-    this.emitir({ tipo: 'sessao_iniciada', pasta, modelo, tarefa });
+    const { pasta, tarefa, modelo = 'sonnet', funcionario, branch, instrucoes } = this.opcoes;
+    this.emitir({ tipo: 'sessao_iniciada', pasta, modelo, tarefa, funcionario, branch });
 
     try {
       const fluxo = query({
@@ -62,6 +65,10 @@ export class Sessao extends EventEmitter {
           permissionMode: 'default',
           // Só configurações do próprio projeto; nada do perfil do usuário vaza.
           settingSources: ['project'],
+          env: ambienteLimpo(),
+          ...(instrucoes
+            ? { systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: instrucoes } }
+            : {}),
           canUseTool: (ferramenta, entrada, { blockedPath }) =>
             this.pedirPermissao(ferramenta, entrada, blockedPath),
           ...(this.opcoes.executavelClaude
@@ -175,6 +182,22 @@ export class Sessao extends EventEmitter {
 }
 
 // ---------- utilidades ----------
+
+// Se o cérebro for iniciado de dentro de outra sessão do Claude Code (comum
+// durante o desenvolvimento), as variáveis de identidade dessa sessão vazariam
+// para os funcionários: todos usariam o mesmo session_id do "pai" e herdariam
+// o contexto dele. Cada funcionário precisa da sua própria identidade.
+const IDENTIDADE_HERDADA = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_REMOTE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+];
+
+export function ambienteLimpo(): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(process.env).filter(([k]) => !IDENTIDADE_HERDADA.includes(k)));
+}
 
 export function encurtar(s: string, n: number) {
   const uma = s.replace(/\s+/g, ' ').trim();

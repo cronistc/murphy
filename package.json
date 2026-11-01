@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "cerebro": "node src/servidor.ts",
     "demo": "node src/demo.ts",
-    "checar": "tsc --noEmit"
+    "checar": "tsc --noEmit",
+    "demo:equipe": "node src/demo-equipe.ts",
+    "start": "node src/servidor.ts"
   },
   "keywords": [],
   "author": "",
