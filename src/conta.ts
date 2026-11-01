@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { ambienteLimpo } from './sessao.ts';
 
-export type StatusConta = { logado: boolean; metodo?: string; erro?: string };
+export type StatusConta = { logado: boolean; metodo?: string; email?: string; erro?: string };
 
 // Caminho do Claude Code embutido no SDK (pacote da plataforma); senão, o do PATH.
 export function executavelClaude(): string {
@@ -29,18 +29,21 @@ export function executavelClaude(): string {
 // Só para testar a tela de login num ambiente que já está logado.
 const FINGIR_DESLOGADO = process.env.ESCRITORIO_FINGIR_DESLOGADO === '1';
 
-export function status(): Promise<StatusConta> {
-  if (FINGIR_DESLOGADO && !login?.concluido) return Promise.resolve({ logado: false });
-  return new Promise((resolver) => {
-    execFile(executavelClaude(), ['auth', 'status', '--json'], { env: ambienteLimpo(), timeout: 30000 }, (erro, saida) => {
-      try {
-        const j = JSON.parse(saida);
-        resolver({ logado: Boolean(j.loggedIn), metodo: j.authMethod });
-      } catch {
-        resolver({ logado: false, erro: erro ? erro.message : 'resposta inesperada do Claude Code' });
-      }
-    });
-  });
+export async function status(): Promise<StatusConta> {
+  if (FINGIR_DESLOGADO && !login?.concluido) return { logado: false };
+  const rodar = (formato: string) =>
+    new Promise<{ erro: Error | null; saida: string }>((r) =>
+      execFile(executavelClaude(), ['auth', 'status', formato], { env: ambienteLimpo(), timeout: 30000 }, (erro, saida) => r({ erro, saida })),
+    );
+  // O JSON diz se está logado; o texto costuma trazer o e-mail da conta.
+  const [j, t] = await Promise.all([rodar('--json'), rodar('--text')]);
+  try {
+    const d = JSON.parse(j.saida);
+    const email = d.email ?? t.saida.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0];
+    return { logado: Boolean(d.loggedIn), metodo: d.authMethod, ...(email ? { email } : {}) };
+  } catch {
+    return { logado: false, erro: j.erro ? j.erro.message : 'resposta inesperada do Claude Code' };
+  }
 }
 
 type Login = { processo: ChildProcess; saida: string; url?: string; concluido: boolean; codigoSaida?: number | null };

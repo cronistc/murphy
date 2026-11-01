@@ -35,6 +35,24 @@ export type Evento = EventoBase &
         custoUsd: number;
       }
     | { tipo: 'erro'; mensagem: string }
+    // Eventos do escritório (não de uma sessão): sessao = 'escritorio'.
+    | { tipo: 'mensagem'; de: string; para: string; texto: string }
+    | { tipo: 'equipe'; equipe: Funcionario[]; motivo: string }
+    | { tipo: 'contratacao_pedida'; idPedido: string; cargo: Cargo; motivo: string; pedidoPor: string }
+    | { tipo: 'contratacao_respondida'; idPedido: string; aprovada: boolean; contratado?: string }
+    | { tipo: 'tarefa_delegada'; de: string; para: string; tarefa: string }
+    | { tipo: 'integracao'; funcionario: string; ok: boolean; mensagem: string }
   );
+
+export type Cargo = 'chefe' | 'senior' | 'pleno' | 'junior';
+
+export type Funcionario = {
+  id: string; // slug: nome da mesa e da branch
+  nome: string;
+  cargo: Cargo;
+  modelo: string; // opus | sonnet | haiku
+  personalidade: string;
+  contratadoEm: string;
+};
 
 export type TipoEvento = Evento['tipo'];

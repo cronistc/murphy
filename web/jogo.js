@@ -11,8 +11,12 @@ const H = ALTURA * T;
 const $ = (s) => document.querySelector(s);
 
 // ---------- estado ----------
-const personagens = new Map(); // nome → Personagem
-const sessaoParaNome = new Map(); // id da sessão → nome
+const personagens = new Map(); // id do funcionário → Personagem
+const sessaoParaNome = new Map(); // id da sessão → id do funcionário
+const contratacoes = new Map(); // idPedido → evento contratacao_pedida
+let conversa = []; // mensagens com o chefe
+let equipeInfo = []; // equipe como o cérebro descreve (cargo, título…)
+let projeto = null;
 const pedidos = new Map(); // idPedido → evento permissao_pedida
 const reservas = new Map(); // "x,y" → nome
 const feedGeral = [];
@@ -50,11 +54,16 @@ const PERMANENCIA = 1400; // ms mínimos num lugar antes de trocar de lugar
 const TEMPO_ENTREGA = 5000;
 
 class Personagem {
-  constructor(nome, modelo, indice) {
-    this.nome = nome;
-    this.modelo = modelo;
+  constructor(id, info, indice) {
+    this.id = id;
+    this.nome = info.nome ?? id;
+    this.cargo = info.cargo ?? '';
+    this.modelo = info.modelo ?? '';
+    this.personalidade = info.personalidade ?? '';
     this.mesa = MESAS[indice % MESAS.length];
-    const h = hash(nome);
+    this.chegarEm = 0;
+    this.saudacao = '';
+    const h = hash(id);
     this.pele = PELES[h % PELES.length];
     this.cabelo = CABELOS[(h >> 4) % CABELOS.length];
     this.fase = (h % 1000) / 1000; // dessincroniza respiração
@@ -93,7 +102,7 @@ class Personagem {
   }
 
   liberarLugar() {
-    for (const [k, n] of reservas) if (n === this.nome) reservas.delete(k);
+    for (const [k, n] of reservas) if (n === this.id) reservas.delete(k);
   }
 
   destino(lugar) {
@@ -101,7 +110,7 @@ class Personagem {
     if (lugar === 'banheiro' || lugar === 'porta') return LUGARES[lugar];
     const opcoes = LUGARES[lugar];
     const livre = opcoes.find((p) => !reservas.has(`${p.x},${p.y}`)) ?? opcoes[opcoes.length - 1];
-    reservas.set(`${livre.x},${livre.y}`, this.nome);
+    reservas.set(`${livre.x},${livre.y}`, this.id);
     return livre;
   }
 
@@ -138,6 +147,12 @@ class Personagem {
   }
 
   atualizar(dt, agora) {
+    // Chegada agendada (início do dia ou recém-contratado): entra pela porta.
+    if (this.chegarEm && agora >= this.chegarEm) {
+      this.chegarEm = 0;
+      if (!this.desejo) this.desejo = { acao: 'ocioso', fixo: false };
+      if (this.saudacao) this.fala = { texto: this.saudacao, ate: agora + 4000 };
+    }
     // Decide se o próximo desejo já pode virar ação.
     if (this.desejo) {
       const mesmoLugar = lugarDaAcao(this.desejo.acao) === lugarDaAcao(this.acao);
@@ -191,34 +206,95 @@ class Personagem {
 }
 
 // ---------- eventos ----------
+const nomeDe = (id) => (id === 'voce' ? 'Você' : personagens.get(id)?.nome ?? id);
+
+// A equipe mudou (chegada do dia, contratação): cria quem falta e faz entrar pela porta.
+function sincronizarEquipe(ev, instantaneo, agora) {
+  equipeInfo = ev.equipe;
+  const recente = Date.now() - new Date(ev.em).getTime() < 20000;
+  let fila = 0;
+  ev.equipe.forEach((f, i) => {
+    let p = personagens.get(f.id);
+    if (!p) {
+      p = new Personagem(f.id, f, i);
+      personagens.set(f.id, p);
+      if (instantaneo && !recente) {
+        p.aplicar({ acao: 'ocioso', fixo: false }, true, agora);
+      } else {
+        p.chegarEm = agora + 600 + fila++ * 1400;
+        p.saudacao = ev.motivo === 'chegada' ? (f.cargo === 'chefe' ? 'Bom dia, pessoal!' : 'Bom dia!') : `Oi! Sou ${f.nome}. Prazer!`;
+      }
+    }
+    Object.assign(p, { nome: f.nome, cargo: f.cargo, modelo: f.modelo, personalidade: f.personalidade });
+  });
+}
+
+function falar(id, texto, agora, ms = 4500) {
+  const p = personagens.get(id);
+  if (p && texto) p.fala = { texto, ate: agora + ms };
+}
+
 function aoEvento(ev, instantaneo) {
   const agora = performance.now();
   ev._n = contador++;
-  if (ev.tipo === 'sessao_iniciada') {
-    const nome = ev.funcionario ?? `sessao-${ev.sessao}`;
-    sessaoParaNome.set(ev.sessao, nome);
-    let p = personagens.get(nome);
-    if (!p) {
-      p = new Personagem(nome, ev.modelo, personagens.size);
-      personagens.set(nome, p);
+
+  // eventos do escritório
+  if (ev.sessao === 'escritorio') {
+    if (ev.tipo === 'equipe') sincronizarEquipe(ev, instantaneo, agora);
+    if (ev.tipo === 'mensagem') {
+      if (!conversa.some((m) => m.em === ev.em && m.de === ev.de)) conversa.push({ de: ev.de, para: ev.para, texto: ev.texto, em: ev.em });
+      if (ev.de !== 'voce' && !instantaneo) falar(ev.de, curto(ev.texto, 90), agora, 6000);
     }
-    Object.assign(p, { modelo: ev.modelo, branch: ev.branch ?? '', pasta: ev.pasta, tarefa: ev.tarefa });
+    if (ev.tipo === 'contratacao_pedida') {
+      contratacoes.set(ev.idPedido, ev);
+      personagens.get(ev.pedidoPor)?.receber({ acao: 'pedindo', fixo: true }, instantaneo, agora);
+    }
+    if (ev.tipo === 'contratacao_respondida') {
+      const pedido = contratacoes.get(ev.idPedido);
+      contratacoes.delete(ev.idPedido);
+      if (pedido) personagens.get(pedido.pedidoPor)?.receber({ acao: 'ocioso', liberar: true, fala: ev.aprovada ? 'Ótimo, obrigado!' : 'Tudo bem, seguimos assim.' }, instantaneo, agora);
+    }
+    if (ev.tipo === 'tarefa_delegada' && !instantaneo) {
+      if (ev.de !== 'voce') falar(ev.de, `${nomeDe(ev.para)}, tenho uma tarefa pra você!`, agora);
+    }
+    if (ev.tipo === 'integracao' && !instantaneo && ev.mensagem !== 'nada novo para integrar') {
+      falar(ev.funcionario, ev.ok ? 'Meu trabalho já está na versão principal.' : 'Ih, deu conflito ao juntar meu trabalho…', agora);
+    }
+    feedGeral.push({ ev, nome: ev.funcionario ?? ev.de ?? ev.pedidoPor });
+    if (feedGeral.length > 300) feedGeral.shift();
+    if (!instantaneo) atualizarPainel();
+    return;
   }
-  if (ev.tipo === 'cli_pronta') {
-    const p = personagens.get(sessaoParaNome.get(ev.sessao));
-    if (p) p.modelo = ev.modelo;
+
+  // eventos de uma sessão de trabalho
+  if (ev.tipo === 'sessao_iniciada') {
+    const id = ev.funcionario ?? `sessao-${ev.sessao}`;
+    sessaoParaNome.set(ev.sessao, id);
+    let p = personagens.get(id);
+    if (!p) {
+      p = new Personagem(id, { nome: id, modelo: ev.modelo }, personagens.size);
+      personagens.set(id, p);
+    }
+    Object.assign(p, { branch: ev.branch ?? '', pasta: ev.pasta, tarefa: ev.tarefa });
   }
   if (ev.tipo === 'permissao_pedida') pedidos.set(ev.idPedido, ev);
   if (ev.tipo === 'permissao_respondida') pedidos.delete(ev.idPedido);
   if (ev.tipo === 'cota') ultimaCota = ev;
 
-  const nome = sessaoParaNome.get(ev.sessao);
-  feedGeral.push({ ev, nome });
+  const id = sessaoParaNome.get(ev.sessao);
+  feedGeral.push({ ev, nome: id });
   if (feedGeral.length > 300) feedGeral.shift();
-  const p = personagens.get(nome);
+  const p = personagens.get(id);
   if (p) {
     p.eventos.push(ev);
-    p.receber(comportamento(ev), instantaneo, agora);
+    const r = comportamento(ev);
+    if (p.cargo === 'chefe') {
+      // O chefe conversa: a resposta dele vai para o chat, o balão só resume.
+      if (ev.tipo === 'sessao_iniciada') r.fala = 'Hmm, deixa eu ver…';
+      if (ev.tipo === 'tarefa_terminada') r.fala = undefined;
+      if (ev.tipo === 'texto') r.fala = undefined;
+    }
+    p.receber(r, instantaneo, agora);
   }
   if (!instantaneo) atualizarPainel();
 }
@@ -482,6 +558,10 @@ function desenharPessoa(p, t) {
       if (p.dir !== 'left') r(x + 1 + ex, top + 3, 1, 2, '#1f1f26');
     }
   }
+  // gravata do chefe
+  if (p.cargo === 'chefe' && p.dir !== 'up') {
+    r(x - 1, top + 7, 2, 4, '#7a2f2a');
+  }
   // objetos na mão
   if (p.chegou && p.acao === 'lendo') {
     r(x - 3, top + 3, 6, 5, '#d9534f');
@@ -606,17 +686,20 @@ function desenharSobreposicao(t) {
   }
   // "VOCÊ" na cadeira do chefe
   const cc = OBJETOS.cadeiraChefe;
-  etiqueta((cc.x * T + 8) * s, (cc.y * T - 3) * s - 14, 'você (chefe)', '#f2b84b', false);
+  etiqueta((cc.x * T + 8) * s, (cc.y * T - 3) * s - 14, 'você', '#f2b84b', false);
   for (const p of personagens.values()) {
     if (!p.visivel) continue;
-    etiqueta(p.pos.x * s, (p.pos.y + 3) * s, p.nome, corDoModelo(p.modelo), p === selecionado);
+    etiqueta(p.pos.x * s, (p.pos.y + 3) * s, p.cargo === 'chefe' ? `${p.nome} ★` : p.nome, corDoModelo(p.modelo), p === selecionado);
   }
   for (const p of personagens.values()) {
     if (!p.visivel) continue;
     const topo = (p.pos.y - 18) * s;
-    if (p.acao === 'pedindo' && p.chegou) {
-      const pd = [...pedidos.values()].find((e) => sessaoParaNome.get(e.sessao) === p.nome);
-      balao(p.pos.x * s, topo, pd ? `✋ Posso? ${pd.ferramenta}: ${curto(pd.resumo, 48)}` : '✋ Chefe…', '#fff1c9', '#f2b84b');
+    const ctPendente = [...contratacoes.values()].some((e) => e.pedidoPor === p.id);
+    if (p.chegou && (p.acao === 'pedindo' || (ctPendente && p.acao === 'entregando'))) {
+      const pd = [...pedidos.values()].find((e) => sessaoParaNome.get(e.sessao) === p.id);
+      const ct = [...contratacoes.values()].find((e) => e.pedidoPor === p.id);
+      const texto = pd ? `✋ Posso? ${pd.ferramenta}: ${curto(pd.resumo, 48)}` : ct ? `📋 Precisamos contratar: ${curto(ct.motivo, 50)}` : '✋ Com licença…';
+      balao(p.pos.x * s, topo, texto, '#fff1c9', '#f2b84b');
     } else if (p.fala) {
       balao(p.pos.x * s, topo, p.fala.texto);
     }
@@ -639,7 +722,8 @@ function quadro(agora) {
   requestAnimationFrame(quadro);
 }
 
-// ---------- interação ----------
+
+// ---------- interação com a sala ----------
 function personagemEm(ev) {
   const b = tela.getBoundingClientRect();
   const x = (ev.clientX - b.left) / escala;
@@ -656,7 +740,6 @@ function personagemEm(ev) {
 tela.addEventListener('mousemove', (e) => { tela.style.cursor = personagemEm(e) ? 'pointer' : 'default'; });
 tela.addEventListener('click', (e) => {
   selecionado = personagemEm(e);
-  if (selecionado) $('#fNome').value = selecionado.nome;
   atualizarPainel();
 });
 
@@ -671,49 +754,126 @@ async function api(metodo, rota, corpo) {
   return dados;
 }
 
-const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
-const lembrar = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+// ---------- conversa com o chefe ----------
+const chefe = () => [...personagens.values()].find((p) => p.cargo === 'chefe');
 
-$('#delegar').addEventListener('submit', async (e) => {
+$('#formChefe').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const botao = e.submitter ?? $('#delegar button');
-  $('#erroForm').textContent = '';
+  const texto = $('#fMsg').value.trim();
+  if (!texto) return;
+  const botao = $('#formChefe button');
   botao.disabled = true;
+  $('#erroChat').textContent = '';
   try {
-    const projeto = $('#fProjeto').value.trim();
-    await api('POST', '/sessoes', {
-      projeto,
-      funcionario: $('#fNome').value.trim(),
-      modelo: $('#fModelo').value,
-      tarefa: $('#fTarefa').value.trim(),
-    });
-    guardar('projeto', projeto);
-    $('#fTarefa').value = '';
+    await api('POST', '/chefe', { texto });
+    $('#fMsg').value = '';
   } catch (err) {
-    $('#erroForm').textContent = err.message;
+    $('#erroChat').textContent = err.message;
   } finally {
     botao.disabled = false;
   }
 });
-
-$('#fAuto').addEventListener('change', async (e) => {
-  try {
-    await api('POST', '/config', { aprovarTudo: e.target.checked });
-  } catch (err) {
-    e.target.checked = !e.target.checked;
-    $('#erroForm').textContent = err.message;
+$('#fMsg').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    $('#formChefe').requestSubmit();
   }
 });
 
+let ultimaConversa = -1;
+function renderizarChat() {
+  const c = chefe();
+  $('#tituloChat').textContent = c ? `Conversa com ${c.nome} (chefe)` : 'Conversa com o chefe';
+  $('#fMsg').placeholder = c ? `Fale com ${c.nome}… (Enter envia)` : 'O chefe chega quando o escritório abrir';
+  const pensando = c?.ocupado ? `<div class="pensando">${esc(c.nome)} está pensando…</div>` : '';
+  $('#chat').innerHTML =
+    conversa.map((m) => `<div class="msg ${m.de === 'voce' ? 'minha' : 'dele'}"><span class="quem">${esc(nomeDe(m.de))}</span>${esc(m.texto)}</div>`).join('') + pensando;
+  if (conversa.length !== ultimaConversa) {
+    $('#chat').scrollTop = $('#chat').scrollHeight;
+    ultimaConversa = conversa.length;
+  }
+}
+
+// ---------- pedidos na sua mesa ----------
 $('#pedidos').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-id]');
   if (!b) return;
   b.disabled = true;
+  const aprovar = b.dataset.aprovar === '1';
   try {
-    await api('POST', `/permissoes/${b.dataset.id}`, { aprovar: b.dataset.aprovar === '1' });
+    if (b.dataset.tipo === 'contratacao') await api('POST', `/contratacoes/${b.dataset.id}`, { aprovar });
+    else await api('POST', `/permissoes/${b.dataset.id}`, { aprovar });
   } catch (err) {
     b.disabled = false;
     alert(err.message);
+  }
+});
+$('#fAuto').addEventListener('change', async (e) => {
+  try {
+    await api('POST', '/config', { aprovarTudo: e.target.checked });
+  } catch {
+    e.target.checked = !e.target.checked;
+  }
+});
+
+// ---------- contratação ----------
+let cargosInfo = {};
+function retrato(canvas, id, modelo) {
+  const c = canvas.getContext('2d');
+  const h = hash(id);
+  const px = (x, y, w, hh, cor) => { c.fillStyle = cor; c.fillRect(x, y, w, hh); };
+  c.clearRect(0, 0, 12, 16);
+  px(2, 9, 8, 6, corDoModelo(modelo));
+  px(0, 10, 2, 4, corDoModelo(modelo));
+  px(10, 10, 2, 4, corDoModelo(modelo));
+  px(2, 2, 8, 7, PELES[h % PELES.length]);
+  px(2, 1, 8, 3, CABELOS[(h >> 4) % CABELOS.length]);
+  px(2, 2, 1, 3, CABELOS[(h >> 4) % CABELOS.length]);
+  px(9, 2, 1, 3, CABELOS[(h >> 4) % CABELOS.length]);
+  px(4, 5, 1, 2, '#1f1f26');
+  px(7, 5, 1, 2, '#1f1f26');
+}
+
+async function mostrarCandidatos(cargo) {
+  for (const b of document.querySelectorAll('#abas button')) b.classList.toggle('ativa', b.dataset.cargo === cargo);
+  $('#verdade').textContent = cargosInfo[cargo]?.verdade ?? '';
+  $('#erroContratar').textContent = '';
+  $('#candidatos').innerHTML = '<div class="vazio">Chamando candidatos…</div>';
+  try {
+    const { candidatos } = await api('GET', `/candidatos?cargo=${cargo}`);
+    $('#candidatos').innerHTML = candidatos
+      .map((c, i) => `<div class="candidato">
+        <canvas width="12" height="16" data-i="${i}"></canvas>
+        <div class="nome">${esc(c.nome)}</div>
+        <div class="vazio">${esc(c.titulo)} · ${esc(c.modelo)}</div>
+        <div class="pers">“${esc(c.personalidade)}”</div>
+        <button data-nome="${esc(c.nome)}" data-cargo="${cargo}">Contratar</button></div>`)
+      .join('');
+    candidatos.forEach((c, i) => retrato(document.querySelector(`#candidatos canvas[data-i="${i}"]`), (c.nome).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(), c.modelo));
+  } catch (err) {
+    $('#candidatos').innerHTML = '';
+    $('#erroContratar').textContent = err.message;
+  }
+}
+$('#btnContratar').addEventListener('click', () => {
+  $('#contratacao').hidden = false;
+  mostrarCandidatos('pleno');
+});
+$('#fecharContratacao').addEventListener('click', () => { $('#contratacao').hidden = true; });
+$('#abas').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-cargo]');
+  if (b) mostrarCandidatos(b.dataset.cargo);
+});
+$('#candidatos').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-nome]');
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await api('POST', '/contratar', { nome: b.dataset.nome, cargo: b.dataset.cargo });
+    $('#contratacao').hidden = true;
+  } catch (err) {
+    b.disabled = false;
+    $('#erroContratar').textContent = err.message;
   }
 });
 
@@ -724,7 +884,7 @@ function hora(ev) {
 
 function resumoEvento(ev) {
   switch (ev.tipo) {
-    case 'sessao_iniciada': return `🚪 chegou: "${curto(ev.tarefa, 90)}"`;
+    case 'sessao_iniciada': return `🚪 começou: "${curto(ev.tarefa, 90)}"`;
     case 'cli_pronta': return `💻 ligou o computador (${ev.modelo})`;
     case 'texto': return `💬 ${curto(ev.texto, 140)}`;
     case 'ferramenta_chamada': return `🔧 ${ev.ferramenta}: ${curto(ev.resumo, 100)}`;
@@ -735,23 +895,36 @@ function resumoEvento(ev) {
     case 'compactacao': return `🚻 compactou contexto: ${ev.tokensAntes} → ${ev.tokensDepois ?? '?'} tokens`;
     case 'tarefa_terminada': return `🏁 ${ev.sucesso ? 'terminou' : 'falhou'}: ${ev.turnos} turnos, ${(ev.duracaoMs / 1000).toFixed(1)}s, US$ ${ev.custoUsd?.toFixed(4)}`;
     case 'erro': return `💥 erro: ${ev.mensagem}`;
+    case 'mensagem': return `🗨️ ${nomeDe(ev.de)} → ${nomeDe(ev.para)}: ${curto(ev.texto, 100)}`;
+    case 'equipe': return `👥 ${ev.motivo}: ${ev.equipe.map((f) => f.nome).join(', ')}`;
+    case 'contratacao_pedida': return `📋 ${nomeDe(ev.pedidoPor)} pediu um ${ev.cargo}: ${curto(ev.motivo, 90)}`;
+    case 'contratacao_respondida': return `🤝 contratação ${ev.aprovada ? `aprovada: ${ev.contratado}` : 'negada'}`;
+    case 'tarefa_delegada': return `📌 ${nomeDe(ev.de)} → ${nomeDe(ev.para)}: ${curto(ev.tarefa, 100)}`;
+    case 'integracao': return `🔀 ${ev.ok ? '' : 'FALHOU: '}${ev.mensagem}`;
     default: return ev.tipo;
   }
 }
 
-function itemFeed(ev, nome) {
-  const quem = nome ? `<b>${esc(nome)}</b> ` : '';
+function itemFeed(ev, id) {
+  const quem = id ? `<b>${esc(nomeDe(id))}</b> ` : '';
   return `<details data-n="${ev._n}"${abertos.has(ev._n) ? ' open' : ''}><summary><span class="hora">${hora(ev)}</span> ${quem}${esc(resumoEvento(ev))}</summary><pre>${esc(JSON.stringify({ ...ev, _n: undefined }, null, 2))}</pre></details>`;
 }
 
 function atualizarFichaStatus() {
   const el = $('#fichaEstado');
   if (el && selecionado) el.textContent = selecionado.descricao;
+  for (const el2 of document.querySelectorAll('.membro .det[data-id]')) {
+    const p = personagens.get(el2.dataset.id);
+    if (p) el2.textContent = `${tituloDe(p)} · ${p.ocupado ? p.descricao : 'livre'}`;
+  }
 }
+
+const tituloDe = (p) => equipeInfo.find((f) => f.id === p.id)?.titulo ?? { chefe: 'Chefe de equipe', senior: 'Sênior', pleno: 'Pleno', junior: 'Júnior' }[p.cargo] ?? cargo(p.modelo);
 
 function atualizarPainel() {
   const trabalhando = [...personagens.values()].filter((p) => p.ocupado).length;
   $('#trabalhando').textContent = `${trabalhando} trabalhando`;
+  if (projeto) $('#projetoNome').textContent = `Projeto: ${projeto.nome} · ${projeto.pasta}`;
   if (ultimaCota) {
     const c = $('#cota');
     c.hidden = false;
@@ -760,37 +933,78 @@ function atualizarPainel() {
     c.title = ultimaCota.renovaEm ? `renova em ${new Date(ultimaCota.renovaEm).toLocaleString('pt-BR')}` : '';
   }
 
-  $('#nomes').innerHTML = [...personagens.keys()].map((n) => `<option value="${esc(n)}">`).join('');
-
+  // pedidos: contratações e permissões
   const ps = [...pedidos.values()];
-  $('#pedidos').innerHTML = ps.length
-    ? ps.map((e) => `<div class="pedido"><b>${esc(sessaoParaNome.get(e.sessao) ?? e.sessao)}</b> quer usar <b>${esc(e.ferramenta)}</b>
+  const cs = [...contratacoes.values()];
+  $('#secPedidos').hidden = !ps.length && !cs.length;
+  $('#pedidos').innerHTML =
+    cs.map((e) => `<div class="pedido"><b>${esc(nomeDe(e.pedidoPor))}</b> pede para contratar um <b>${esc({ junior: 'Júnior', pleno: 'Pleno', senior: 'Sênior' }[e.cargo])}</b>
+        <p>${esc(e.motivo)}</p>
+        <div class="linha"><button data-tipo="contratacao" data-id="${e.idPedido}" data-aprovar="1">Contratar</button>
+        <button class="neutro" data-tipo="contratacao" data-id="${e.idPedido}" data-aprovar="0">Agora não</button></div></div>`).join('') +
+    ps.map((e) => `<div class="pedido"><b>${esc(nomeDe(sessaoParaNome.get(e.sessao)))}</b> quer usar <b>${esc(e.ferramenta)}</b>
         <code>${esc(e.resumo)}</code>
         <div class="linha"><button data-id="${e.idPedido}" data-aprovar="1">Aprovar</button>
-        <button class="neutro" data-id="${e.idPedido}" data-aprovar="0">Negar</button></div></div>`).join('')
-    : '<div class="vazio">Ninguém esperando por você.</div>';
+        <button class="neutro" data-id="${e.idPedido}" data-aprovar="0">Negar</button></div></div>`).join('');
 
+  renderizarChat();
+
+  // equipe
+  const membros = [...personagens.values()].filter((p) => p.cargo);
+  $('#equipe').innerHTML = membros.length
+    ? membros.map((p) => `<div class="membro${p === selecionado ? ' sel' : ''}" data-id="${esc(p.id)}">
+        <span class="ponto" style="background:${corDoModelo(p.modelo)}"></span>
+        <div class="info"><div class="nome">${esc(p.nome)}${p.cargo === 'chefe' ? ' ★' : ''}</div>
+        <div class="det" data-id="${esc(p.id)}">${esc(tituloDe(p))} · ${esc(p.ocupado ? p.descricao : 'livre')}</div></div></div>`).join('')
+    : '<div class="vazio">Ninguém ainda.</div>';
+
+  // ficha de quem está selecionado
   const ficha = $('#ficha');
   if (selecionado) {
     const p = selecionado;
     ficha.hidden = false;
     ficha.innerHTML = `<div class="topo"><span class="nome"><span class="ponto" style="background:${corDoModelo(p.modelo)}"></span>${esc(p.nome)}</span>
       <button class="neutro" id="fecharFicha">fechar</button></div>
-      <dl><dt>Cargo</dt><dd>${esc(cargo(p.modelo))}</dd>
+      <dl><dt>Cargo</dt><dd>${esc(tituloDe(p))} (${esc(p.modelo)})</dd>
+      ${p.personalidade ? `<dt>Jeito</dt><dd>${esc(p.personalidade)}</dd>` : ''}
       <dt>Agora</dt><dd id="fichaEstado">${esc(p.descricao)}</dd>
-      <dt>Mesa</dt><dd>${esc(p.branch || '—')}</dd>
-      <dt>Pasta</dt><dd>${esc(p.pasta)}</dd>
-      <dt>Tarefa</dt><dd>${esc(p.tarefa)}</dd></dl>
-      <h2>Log técnico</h2>
-      <div class="feed">${p.eventos.slice(-150).reverse().map((e) => itemFeed(e)).join('')}</div>`;
+      ${p.tarefa ? `<dt>Última tarefa</dt><dd>${esc(curto(p.tarefa, 240))}</dd>` : ''}
+      ${p.branch ? `<dt>Mesa</dt><dd>${esc(p.branch)}</dd>` : ''}</dl>
+      ${p.cargo && p.cargo !== 'chefe' ? `<details><summary>Dar uma tarefa direto (sem passar pelo chefe)</summary>
+        <form id="formDireta"><textarea id="fDireta" required placeholder="O que ${esc(p.nome)} deve fazer?"></textarea>
+        <button type="submit" style="margin-top:6px">Entregar tarefa</button><div class="erro" id="erroDireta"></div></form></details>` : ''}
+      <details><summary>Log técnico</summary><div class="feed">${p.eventos.slice(-150).reverse().map((e) => itemFeed(e)).join('') || '<div class="vazio">Nada ainda.</div>'}</div></details>`;
     $('#fecharFicha').onclick = () => { selecionado = null; atualizarPainel(); };
+    $('#formDireta')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await api('POST', `/funcionarios/${encodeURIComponent(p.id)}/tarefa`, { tarefa: $('#fDireta').value });
+        $('#fDireta').value = '';
+      } catch (err) {
+        $('#erroDireta').textContent = err.message;
+      }
+    });
   } else {
     ficha.hidden = true;
   }
 
-  $('#feed').innerHTML = feedGeral.slice(-80).reverse().map(({ ev, nome }) => itemFeed(ev, nome)).join('')
-    || '<div class="vazio">Nada aconteceu ainda. Delegue uma tarefa!</div>';
+  $('#feed').innerHTML = feedGeral.slice(-80).reverse().map(({ ev, nome }) => itemFeed(ev, nome)).join('') || '<div class="vazio">Nada ainda.</div>';
 }
+$('#equipe').addEventListener('click', (e) => {
+  const m = e.target.closest('.membro');
+  if (!m) return;
+  selecionado = personagens.get(m.dataset.id) ?? null;
+  atualizarPainel();
+});
+// O painel não pode ser redesenhado enquanto alguém digita na ficha.
+const _atualizar = atualizarPainel;
+atualizarPainel = function () {
+  if (document.activeElement?.id === 'fDireta') {
+    renderizarChat();
+    return;
+  }
+  _atualizar();
+};
 
 document.querySelector('aside').addEventListener('toggle', (e) => {
   const n = Number(e.target.dataset?.n);
@@ -799,35 +1013,56 @@ document.querySelector('aside').addEventListener('toggle', (e) => {
   else abertos.delete(n);
 }, true);
 
-// ---------- login na conta Claude ----------
-let verificandoConta = null;
-async function verificarConta() {
-  try {
-    const c = await api('GET', '/conta');
-    $('#login').hidden = c.logado;
-    if (c.logado && verificandoConta) {
-      clearInterval(verificandoConta);
-      verificandoConta = null;
-    }
-    if (!c.logado && !verificandoConta) verificandoConta = setInterval(verificarConta, 3000);
-  } catch {}
+// ---------- primeira abertura: conta e projeto ----------
+function passo(id) {
+  for (const p of ['bvVerificando', 'bvLogado', 'bvEntrar', 'bvCodigo']) $(`#${p}`).hidden = p !== id;
 }
-$('#btnEntrar').addEventListener('click', async (e) => {
-  e.target.disabled = true;
+
+async function verificarConta() {
+  passo('bvVerificando');
+  const c = await api('GET', '/conta');
+  if (c.logado) {
+    $('#bvEmail').textContent = c.email ? `: ${c.email}` : '';
+    passo('bvLogado');
+  } else {
+    passo('bvEntrar');
+  }
+  return c;
+}
+
+function irParaProjeto() {
+  $('#bvConta').hidden = true;
+  $('#bvProjeto').hidden = false;
+  $('#pNome').focus();
+}
+
+$('#bvContinuar').addEventListener('click', irParaProjeto);
+$('#bvOutra').addEventListener('click', () => entrar());
+$('#btnEntrar').addEventListener('click', () => entrar());
+
+let esperandoLogin = null;
+async function entrar() {
   $('#loginErro').textContent = '';
   try {
     const r = await api('POST', '/conta/entrar');
     if (!r.url) throw new Error(r.saida?.trim() || 'o Claude Code não respondeu');
     $('#loginLink').href = r.url;
-    $('#loginPasso1').hidden = true;
-    $('#loginPasso2').hidden = false;
+    passo('bvCodigo');
     $('#fCodigo').focus();
+    // Se o login terminar pelo navegador (sem código), seguimos sozinhos.
+    clearInterval(esperandoLogin);
+    esperandoLogin = setInterval(async () => {
+      const c = await api('GET', '/conta').catch(() => ({}));
+      if (c.logado) {
+        clearInterval(esperandoLogin);
+        loginConcluido();
+      }
+    }, 3000);
   } catch (err) {
     $('#loginErro').textContent = err.message;
-  } finally {
-    e.target.disabled = false;
   }
-});
+}
+
 $('#formCodigo').addEventListener('submit', async (e) => {
   e.preventDefault();
   const botao = e.submitter;
@@ -835,28 +1070,71 @@ $('#formCodigo').addEventListener('submit', async (e) => {
   $('#loginErro').textContent = '';
   try {
     const r = await api('POST', '/conta/codigo', { codigo: $('#fCodigo').value });
-    if (r.logado) $('#login').hidden = true;
+    if (r.logado) loginConcluido();
     else $('#loginErro').textContent = r.saida || 'não deu certo; tente de novo';
   } catch (err) {
     $('#loginErro').textContent = err.message;
-    $('#loginPasso1').hidden = false;
-    $('#loginPasso2').hidden = true;
+    passo('bvEntrar');
   } finally {
     botao.disabled = false;
   }
 });
 
+function loginConcluido() {
+  clearInterval(esperandoLogin);
+  if (projeto) $('#boasvindas').hidden = true; // só faltava a conta
+  else irParaProjeto();
+}
+
+$('#bvProjeto').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const botao = e.submitter;
+  botao.disabled = true;
+  $('#bvErro').textContent = '';
+  try {
+    const estado = await api('POST', '/boas-vindas', { nome: $('#pNome').value, descricao: $('#pDesc').value, pasta: $('#pPasta').value || undefined });
+    aplicarEstado(estado);
+    $('#boasvindas').hidden = true;
+  } catch (err) {
+    $('#bvErro').textContent = err.message;
+  } finally {
+    botao.disabled = false;
+  }
+});
+
+function aplicarEstado(estado) {
+  projeto = estado.projeto ?? null;
+  cargosInfo = estado.cargos ?? {};
+  equipeInfo = estado.equipe ?? [];
+  $('#fAuto').checked = Boolean(estado.aprovarTudo);
+  for (const m of estado.conversa ?? []) if (!conversa.some((x) => x.em === m.em && x.de === m.de)) conversa.push(m);
+  conversa.sort((a, b) => a.em.localeCompare(b.em));
+  for (const c of estado.contratacoes ?? []) {
+    if (!contratacoes.has(c.id)) contratacoes.set(c.id, { tipo: 'contratacao_pedida', idPedido: c.id, cargo: c.cargo, motivo: c.motivo, pedidoPor: c.pedidoPor });
+  }
+  atualizarPainel();
+}
+
+async function iniciar() {
+  const estado = await api('GET', '/estado');
+  aplicarEstado(estado);
+  if (!estado.boasVindas) {
+    $('#boasvindas').hidden = false;
+    await verificarConta();
+  } else {
+    // Dias seguintes: só pede a conta se ela tiver saído.
+    const c = await api('GET', '/conta').catch(() => ({ logado: true }));
+    if (!c.logado) {
+      $('#boasvindas').hidden = false;
+      passo('bvEntrar');
+    }
+  }
+}
+
 // ---------- início ----------
-verificarConta();
 redimensionar();
-api('GET', '/config')
-  .then((c) => {
-    $('#fProjeto').value = lembrar('projeto') || c.projetoPadrao;
-    $('#fAuto').checked = c.aprovarTudo;
-  })
-  .catch(() => {});
 conectar();
-atualizarPainel();
+iniciar().catch((err) => console.error(err));
 requestAnimationFrame(quadro);
 // para testes automatizados
-window.escritorio = { personagens, pedidos };
+window.escritorio = { personagens, pedidos, contratacoes, conversa: () => conversa };

@@ -94,7 +94,7 @@ function primeiraFrase(s) {
 export function comportamento(ev) {
   switch (ev.tipo) {
     case 'sessao_iniciada':
-      return { acao: 'pensando', fala: 'Bom dia! Deixa eu ver a tarefa…', chegando: true };
+      return { acao: 'pensando', fala: 'Deixa comigo!', chegando: true };
     case 'cli_pronta':
       return { acao: 'pensando' };
     case 'texto':
@@ -103,7 +103,9 @@ export function comportamento(ev) {
       if (LEITURA.has(ev.ferramenta)) return { acao: 'lendo' };
       if (ESCRITA.has(ev.ferramenta)) return { acao: 'digitando' };
       if (ev.ferramenta === 'Bash') return { acao: ESPERA.test(ev.resumo) ? 'cafe' : 'digitando' };
-      if (ev.ferramenta === 'TodoWrite') return { acao: 'pensando' };
+      if (ev.ferramenta === 'TodoWrite' || ev.ferramenta === 'ToolSearch') return { acao: 'pensando' };
+      // Ferramentas do escritório (ver equipe, delegar, pedir contratação): é gestão, não código.
+      if (ev.ferramenta.startsWith('mcp__escritorio__')) return { acao: 'pensando' };
       return { acao: 'digitando' };
     case 'ferramenta_resultado':
       return ev.erro ? { fala: 'Hmm, deu erro…' } : {};

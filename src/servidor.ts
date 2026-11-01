@@ -1,35 +1,34 @@
-// O "cérebro": serviço local que inicia sessões de trabalho e publica os eventos.
-// Qualquer interface (o jogo, um app de celular, curl) só se conecta a ele.
+// O "cérebro": a porta de entrada HTTP para o orquestrador (o escritório).
+// Qualquer interface (a janela do app, um celular, curl) só se conecta a ele.
 //
-//   POST /sessoes             {"projeto": "...", "funcionario": "ana", "tarefa": "...", "modelo": "haiku"}
-//                             cada funcionário trabalha na sua mesa (git worktree próprio).
-//                             Alternativa sem mesa: {"pasta": "...", "tarefa": "..."}
-//   GET  /mesas?projeto=...   mesas (worktrees) do projeto
-//   GET  /sessoes             lista sessões e permissões pendentes
-//   GET  /eventos             stream SSE com todos os eventos (histórico + ao vivo)
-//   POST /permissoes/:id      {"aprovar": true, "motivo": "ok"}
-//   GET  /config              {"projetoPadrao", "aprovarTudo"}
-//   POST /config              {"aprovarTudo": true}  (aprova também os pedidos pendentes)
-//   GET  /conta               {"logado": bool}  login do usuário na conta Claude
-//   POST /conta/entrar        inicia o login oficial; devolve {"url"} (o navegador abre sozinho)
-//   POST /conta/codigo        {"codigo": "..."} cola o código mostrado pelo site
-//   GET  /                    a tela do escritório (pasta web/)
+//   GET  /estado               projeto, equipe, conversa com o chefe, pedidos
+//   POST /boas-vindas          {"nome", "descricao"?, "pasta"?}  primeira abertura
+//   POST /chefe                {"texto"}  fala com o chefe
+//   GET  /candidatos?cargo=    candidatos para contratar (junior | pleno | senior)
+//   POST /contratar            {"nome", "cargo"}
+//   POST /contratacoes/:id     {"aprovar": bool}  pedido de contratação do chefe
+//   POST /funcionarios/:id/tarefa {"tarefa"}  tarefa direta (sem passar pelo chefe)
+//   POST /permissoes/:id       {"aprovar": bool}
+//   GET  /eventos              stream SSE (histórico + ao vivo)
+//   GET  /config, POST /config {"aprovarTudo": bool}
+//   GET  /conta, POST /conta/entrar, POST /conta/codigo {"codigo"}  login na conta Claude
+//   POST /sessoes, GET /sessoes, GET /mesas?projeto=  API de baixo nível (demos)
+//   GET  /                     a tela do escritório (pasta web/)
 
 import http from 'node:http';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Sessao, type Decisao, type PedidoPermissao } from './sessao.ts';
-import { registrar } from './log.ts';
-import { Escritorio, slug } from './escritorio.ts';
+import { Escritorio } from './escritorio.ts';
+import { Orquestrador } from './orquestrador.ts';
+import { CARGOS } from './candidatos.ts';
+import { formatar } from './log.ts';
+import { PASTA_DADOS } from './estado.ts';
 import * as conta from './conta.ts';
-import type { Evento } from './eventos.ts';
+import type { Cargo, Evento } from './eventos.ts';
 
 const PORTA = Number(process.env.PORTA ?? 4317);
-const PASTA_LOGS = path.resolve(process.env.PASTA_LOGS ?? 'logs');
-let aprovarTudo = process.env.APROVAR_TUDO === '1';
-const PROJETO_PADRAO = path.resolve(process.env.PROJETO ?? path.join(os.homedir(), 'escritorio-projetos', 'meu-escritorio'));
+const PASTA_LOGS = path.resolve(process.env.PASTA_LOGS ?? path.join(PASTA_DADOS, 'logs'));
 const PASTA_WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TIPOS: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -38,55 +37,19 @@ const TIPOS: Record<string, string> = {
   '.png': 'image/png',
 };
 
-const sessoes = new Map<string, { sessao: Sessao; projeto?: string; estado: 'rodando' | 'terminada' }>();
-const pendentes = new Map<string, { sessao: string; pedido: PedidoPermissao; responder: (d: Decisao) => void }>();
+const escritorio = new Orquestrador({ pastaLogs: PASTA_LOGS, aprovarTudo: process.env.APROVAR_TUDO === '1' });
 const historico: Evento[] = [];
 const ouvintes = new Set<http.ServerResponse>();
 
 // O id SSE é a posição no histórico: ao reconectar, o navegador manda
 // Last-Event-ID e recebe só o que perdeu.
 const sse = (i: number) => `id: ${i}\ndata: ${JSON.stringify(historico[i])}\n\n`;
-
-function publicar(ev: Evento) {
+escritorio.on('evento', (ev: Evento) => {
+  if (ev.sessao === 'escritorio') console.log(formatar(ev)); // as sessões já se registram sozinhas
   historico.push(ev);
   const linha = sse(historico.length - 1);
   for (const res of ouvintes) res.write(linha);
-}
-
-type Pedido = { pasta?: string; projeto?: string; funcionario?: string; tarefa: string; modelo?: string };
-
-function iniciar({ pasta, projeto, funcionario, tarefa, modelo }: Pedido) {
-  let mesa: { pasta: string; branch?: string; funcionario?: string; instrucoes?: string };
-  if (projeto && funcionario) {
-    const escritorio = Escritorio.abrir(projeto);
-    const nome = slug(funcionario);
-    const ocupada = [...sessoes.values()].some(
-      (s) => s.estado === 'rodando' && s.sessao.opcoes.funcionario === nome && s.projeto === escritorio.projeto,
-    );
-    if (ocupada) throw new Error(`${nome} já está trabalhando numa tarefa; espere terminar`);
-    const m = escritorio.mesa(nome);
-    mesa = { ...m, instrucoes: escritorio.instrucoes(m) };
-  } else if (pasta) {
-    if (!fs.existsSync(pasta) || !fs.statSync(pasta).isDirectory()) throw new Error(`pasta não existe: ${pasta}`);
-    mesa = { pasta };
-  } else {
-    throw new Error('informe projeto + funcionario, ou pasta');
-  }
-  const sessao: Sessao = new Sessao({
-    ...mesa,
-    tarefa,
-    modelo,
-    decidirPermissao: (pedido) =>
-      aprovarTudo
-        ? Promise.resolve({ aprovada: true, motivo: 'aprovação automática ligada' })
-        : new Promise((responder) => pendentes.set(pedido.idPedido, { sessao: sessao.id, pedido, responder })),
-  });
-  registrar(sessao, PASTA_LOGS);
-  sessao.on('evento', publicar);
-  sessoes.set(sessao.id, { sessao, projeto: projeto && path.resolve(projeto), estado: 'rodando' });
-  sessao.rodar().finally(() => (sessoes.get(sessao.id)!.estado = 'terminada'));
-  return sessao.id;
-}
+});
 
 async function lerJson(req: http.IncomingMessage): Promise<any> {
   let corpo = '';
@@ -99,38 +62,54 @@ function json(res: http.ServerResponse, status: number, dados: unknown) {
   res.end(JSON.stringify(dados, null, 2));
 }
 
+function estadoPublico() {
+  const e = escritorio.estado;
+  return {
+    boasVindas: e.boasVindas,
+    projeto: e.projeto,
+    equipe: e.equipe.map((f) => ({ ...f, titulo: CARGOS[f.cargo].titulo, ocupado: escritorio.ocupado(f.id) })),
+    conversa: e.conversa.slice(-100),
+    contratacoes: [...escritorio.contratacoes].map(([id, c]) => ({ id, ...c, titulo: CARGOS[c.cargo].titulo })),
+    aprovarTudo: escritorio.aprovarTudo,
+    cargos: Object.fromEntries(Object.entries(CARGOS).filter(([k]) => k !== 'chefe').map(([k, v]) => [k, { titulo: v.titulo, verdade: v.verdade, modelo: v.modelo }])),
+  };
+}
+
 const servidor = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', 'http://x');
-    if (req.method === 'POST' && url.pathname === '/sessoes') {
-      const p = await lerJson(req);
-      if (!p.tarefa) return json(res, 400, { erro: 'informe a tarefa' });
-      return json(res, 201, { sessao: iniciar({ ...p, pasta: p.pasta && path.resolve(p.pasta) }) });
+    const rota = `${req.method} ${url.pathname}`;
+    let m: RegExpMatchArray | null;
+
+    if (rota === 'GET /estado') return json(res, 200, estadoPublico());
+    if (rota === 'POST /boas-vindas') {
+      escritorio.boasVindas(await lerJson(req));
+      return json(res, 200, estadoPublico());
     }
-    if (req.method === 'GET' && url.pathname === '/mesas') {
-      const projeto = url.searchParams.get('projeto');
-      if (!projeto) return json(res, 400, { erro: 'informe ?projeto=' });
-      return json(res, 200, { mesas: Escritorio.abrir(projeto).mesas() });
+    if (rota === 'POST /chefe') {
+      escritorio.falarComChefe(String((await lerJson(req)).texto ?? ''));
+      return json(res, 200, { ok: true });
     }
-    if (req.method === 'GET' && url.pathname === '/sessoes') {
-      return json(res, 200, {
-        sessoes: [...sessoes.values()].map(({ sessao, estado }) => ({
-          id: sessao.id,
-          estado,
-          funcionario: sessao.opcoes.funcionario,
-          branch: sessao.opcoes.branch,
-          pasta: sessao.opcoes.pasta,
-          tarefa: sessao.opcoes.tarefa,
-        })),
-        permissoesPendentes: [...pendentes.values()].map(({ sessao, pedido }) => ({
-          sessao,
-          id: pedido.idPedido,
-          ferramenta: pedido.ferramenta,
-          resumo: pedido.resumo,
-        })),
-      });
+    if (rota === 'GET /candidatos') return json(res, 200, { candidatos: escritorio.candidatos(url.searchParams.get('cargo') as Cargo) });
+    if (rota === 'POST /contratar') {
+      const { nome, cargo } = await lerJson(req);
+      return json(res, 200, { contratado: escritorio.contratar(nome, cargo) });
     }
-    if (req.method === 'GET' && url.pathname === '/eventos') {
+    if (req.method === 'POST' && (m = url.pathname.match(/^\/contratacoes\/([\w-]+)$/))) {
+      const { aprovar } = await lerJson(req);
+      return json(res, 200, { contratado: escritorio.responderContratacao(m[1], Boolean(aprovar)) ?? null });
+    }
+    if (req.method === 'POST' && (m = url.pathname.match(/^\/funcionarios\/([\w-]+)\/tarefa$/))) {
+      const { tarefa } = await lerJson(req);
+      if (!tarefa?.trim()) return json(res, 400, { erro: 'descreva a tarefa' });
+      return json(res, 201, { sessao: escritorio.tarefa(m[1], tarefa.trim(), 'voce') });
+    }
+    if (req.method === 'POST' && (m = url.pathname.match(/^\/permissoes\/([\w-]+)$/))) {
+      const { aprovar, motivo } = await lerJson(req);
+      escritorio.responderPermissao(m[1], Boolean(aprovar), motivo);
+      return json(res, 200, { ok: true });
+    }
+    if (rota === 'GET /eventos') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       const ultimo = Number(req.headers['last-event-id'] ?? -1);
       for (let i = Number.isInteger(ultimo) ? ultimo + 1 : 0; i < historico.length; i++) res.write(sse(i));
@@ -139,37 +118,39 @@ const servidor = http.createServer(async (req, res) => {
       req.on('close', () => ouvintes.delete(res));
       return;
     }
-    const m = url.pathname.match(/^\/permissoes\/([\w-]+)$/);
-    if (req.method === 'POST' && m) {
-      const p = pendentes.get(m[1]);
-      if (!p) return json(res, 404, { erro: 'pedido não encontrado ou já respondido' });
-      const { aprovar, motivo } = await lerJson(req);
-      pendentes.delete(m[1]);
-      p.responder({ aprovada: Boolean(aprovar), motivo: motivo ?? (aprovar ? 'aprovado pelo usuário' : 'negado pelo usuário') });
-      return json(res, 200, { ok: true });
+    if (rota === 'GET /config') return json(res, 200, { aprovarTudo: escritorio.aprovarTudo });
+    if (rota === 'POST /config') {
+      const c = await lerJson(req);
+      if (typeof c.aprovarTudo === 'boolean') escritorio.definirAprovarTudo(c.aprovarTudo);
+      return json(res, 200, { aprovarTudo: escritorio.aprovarTudo });
     }
-    if (req.method === 'GET' && url.pathname === '/conta') return json(res, 200, await conta.status());
-    if (req.method === 'POST' && url.pathname === '/conta/entrar') return json(res, 200, await conta.iniciarLogin());
-    if (req.method === 'POST' && url.pathname === '/conta/codigo') {
+    if (rota === 'GET /conta') return json(res, 200, await conta.status());
+    if (rota === 'POST /conta/entrar') return json(res, 200, await conta.iniciarLogin());
+    if (rota === 'POST /conta/codigo') {
       const { codigo } = await lerJson(req);
       if (!codigo) return json(res, 400, { erro: 'informe o código' });
       const r = await conta.enviarCodigo(String(codigo));
       return json(res, 200, { ...r, ...(await conta.status()) });
     }
-    if (req.method === 'GET' && url.pathname === '/config') {
-      return json(res, 200, { projetoPadrao: PROJETO_PADRAO, aprovarTudo });
+
+    // API de baixo nível (demos e testes)
+    if (rota === 'POST /sessoes') {
+      const p = await lerJson(req);
+      if (!p.tarefa) return json(res, 400, { erro: 'informe a tarefa' });
+      return json(res, 201, { sessao: escritorio.sessaoLivre({ ...p, pasta: p.pasta && path.resolve(p.pasta) }) });
     }
-    if (req.method === 'POST' && url.pathname === '/config') {
-      const c = await lerJson(req);
-      if (typeof c.aprovarTudo === 'boolean') aprovarTudo = c.aprovarTudo;
-      if (aprovarTudo) {
-        for (const [id, p] of pendentes) {
-          pendentes.delete(id);
-          p.responder({ aprovada: true, motivo: 'aprovação automática ligada' });
-        }
-      }
-      return json(res, 200, { projetoPadrao: PROJETO_PADRAO, aprovarTudo });
+    if (rota === 'GET /sessoes') {
+      return json(res, 200, {
+        sessoes: [...escritorio.sessoes.values()].map((r) => ({ id: r.sessao.id, estado: r.estado, funcionario: r.funcionario, pasta: r.sessao.opcoes.pasta, tarefa: r.tarefa })),
+        permissoesPendentes: [...escritorio.pendentes.values()].map(({ sessao, pedido }) => ({ sessao, id: pedido.idPedido, ferramenta: pedido.ferramenta, resumo: pedido.resumo })),
+      });
     }
+    if (rota === 'GET /mesas') {
+      const projeto = url.searchParams.get('projeto');
+      if (!projeto) return json(res, 400, { erro: 'informe ?projeto=' });
+      return json(res, 200, { mesas: Escritorio.abrir(projeto).mesas() });
+    }
+
     if (req.method === 'GET') {
       const nome = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       const tipo = TIPOS[path.extname(nome)];
@@ -188,7 +169,7 @@ const servidor = http.createServer(async (req, res) => {
 for (const sinal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(sinal, () => {
     conta.cancelarLogin();
-    for (const { sessao } of sessoes.values()) sessao.parar();
+    escritorio.desligar();
     servidor.close();
     setTimeout(() => process.exit(0), 500).unref();
   });
@@ -196,5 +177,6 @@ for (const sinal of ['SIGTERM', 'SIGINT'] as const) {
 
 servidor.listen(PORTA, '127.0.0.1', () => {
   console.log(`🧠 cérebro ouvindo. Abra o escritório em http://127.0.0.1:${PORTA}`);
-  console.log(`   logs em ${PASTA_LOGS}; projeto padrão ${PROJETO_PADRAO}${aprovarTudo ? '; aprovação automática ligada' : ''}`);
+  console.log(`   dados em ${PASTA_DADOS}; logs em ${PASTA_LOGS}${escritorio.aprovarTudo ? '; aprovação automática ligada' : ''}`);
+  escritorio.abrirExpediente();
 });

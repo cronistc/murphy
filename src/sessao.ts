@@ -27,6 +27,10 @@ export type OpcoesSessao = {
   funcionario?: string; // quem está sentado nesta mesa
   branch?: string; // branch git da mesa (worktree)
   instrucoes?: string; // anexado ao system prompt do Claude Code
+  retomar?: string; // session_id da CLI para continuar uma conversa (o chefe)
+  mcpServers?: Record<string, any>; // ferramentas do escritório (ex.: as do chefe)
+  ferramentasLiberadas?: string[]; // rodam sem pedir permissão
+  ferramentasProibidas?: string[]; // nem aparecem para o modelo
 };
 
 // Emite: 'evento' (Evento normalizado) e 'bruto' (mensagem original do SDK).
@@ -51,7 +55,7 @@ export class Sessao extends EventEmitter {
   }
 
   async rodar(): Promise<void> {
-    const { pasta, tarefa, modelo = 'sonnet', funcionario, branch, instrucoes } = this.opcoes;
+    const { pasta, tarefa, modelo = 'sonnet', funcionario, branch, instrucoes, retomar } = this.opcoes;
     this.emitir({ tipo: 'sessao_iniciada', pasta, modelo, tarefa, funcionario, branch });
 
     try {
@@ -66,6 +70,10 @@ export class Sessao extends EventEmitter {
           // Só configurações do próprio projeto; nada do perfil do usuário vaza.
           settingSources: ['project'],
           env: ambienteLimpo(),
+          ...(retomar ? { resume: retomar } : {}),
+          ...(this.opcoes.mcpServers ? { mcpServers: this.opcoes.mcpServers } : {}),
+          ...(this.opcoes.ferramentasLiberadas ? { allowedTools: this.opcoes.ferramentasLiberadas } : {}),
+          ...(this.opcoes.ferramentasProibidas ? { disallowedTools: this.opcoes.ferramentasProibidas } : {}),
           ...(instrucoes
             ? { systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: instrucoes } }
             : {}),
