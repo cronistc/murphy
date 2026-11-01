@@ -1,0 +1,290 @@
+#!/usr/bin/python3
+# Escritório Pixel: abre o escritório numa janela própria.
+# Liga o cérebro (Node) numa porta livre, mostra a tela numa janela GTK com
+# WebKit e, ao fechar a janela, desliga o cérebro e os funcionários.
+
+import ctypes
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import urllib.request
+
+import gi
+
+gi.require_version('Gtk', '4.0')
+gi.require_version('WebKit', '6.0')
+from gi.repository import Gio, GLib, Gtk, WebKit  # noqa: E402
+
+APP_ID = 'io.github.cronistc.EscritorioPixel'
+PASTA_APP = os.environ.get('ESCRITORIO_APP', '/usr/lib/escritorio-pixel')
+DADOS = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'escritorio-pixel')
+CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'escritorio-pixel')
+NODE_MINIMO = 18
+
+
+def morrer_junto():
+    # Se a janela morrer de qualquer jeito (até travando), o kernel avisa o
+    # cérebro com SIGTERM: nada fica rodando escondido.
+    ctypes.CDLL('libc.so.6', use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+
+
+def porta_livre():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def versao_node(node):
+    try:
+        v = subprocess.run([node, '-v'], capture_output=True, text=True, timeout=10).stdout.strip()
+        return int(v.lstrip('v').split('.')[0])
+    except Exception:
+        return 0
+
+
+class Escritorio(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        self.janela = None
+        self.cerebro = None
+        self.porta = None
+        self.tentativas = 0
+        self.fechando = False
+
+    # ---------- janela ----------
+    def do_activate(self):
+        if self.janela:
+            self.janela.present()
+            return
+        self.janela = Gtk.ApplicationWindow(application=self, title='Escritório Pixel')
+        self.janela.set_default_size(1440, 900)
+        self.janela.maximize()  # o escritório ocupa a tela; F11 deixa em tela cheia
+        self.janela.connect('close-request', self.ao_fechar)
+        self.aviso = Gtk.Label(label='Abrindo o escritório…')
+        self.aviso.set_wrap(True)
+        self.aviso.set_selectable(True)
+        self.aviso.set_margin_start(32)
+        self.aviso.set_margin_end(32)
+        self.janela.set_child(self.aviso)
+        self.janela.present()
+        self.ligar_cerebro()
+
+    def mostrar_erro(self, texto):
+        self.aviso.set_markup(f'<b>Não consegui abrir o escritório.</b>\n\n{GLib.markup_escape_text(texto)}')
+        self.janela.set_child(self.aviso)
+
+    # ---------- cérebro ----------
+    def ligar_cerebro(self, mesma_porta=False):
+        node = shutil.which('node')
+        if not node or versao_node(node) < NODE_MINIMO:
+            return self.mostrar_erro(f'Precisa do Node.js {NODE_MINIMO} ou mais novo. Instale com: sudo dnf install nodejs')
+        os.makedirs(DADOS, exist_ok=True)
+        if not mesma_porta:
+            self.porta = porta_livre()
+        env = dict(os.environ, PORTA=str(self.porta), PASTA_LOGS=os.path.join(DADOS, 'logs'), ESCRITORIO_JANELA='1')
+        self.log = open(os.path.join(DADOS, 'cerebro.log'), 'w')
+        self.cerebro = subprocess.Popen(
+            [node, os.path.join(PASTA_APP, 'dist', 'servidor.js')],
+            cwd=DADOS, env=env, stdout=self.log, stderr=subprocess.STDOUT,
+            start_new_session=True,  # grupo próprio: dá para desligar tudo de uma vez
+            preexec_fn=morrer_junto,
+        )
+        GLib.timeout_add(200, self.esperar_cerebro)
+
+    # "Recomeçar do zero" no jogo: o cérebro guarda o escritório antigo e sai
+    # com o código 75; a janela liga um cérebro novo na mesma porta e a página
+    # se recarrega sozinha.
+    def vigiar_cerebro(self):
+        if self.fechando or not self.cerebro:
+            return False
+        codigo = self.cerebro.poll()
+        if codigo is None:
+            return True
+        if codigo == 75:
+            self.cerebro = None
+            if hasattr(self, 'navegador'):
+                self.navegador.set_visible(False)
+            self.religando = True
+            self.tentativas = 0
+            self.ligar_cerebro(mesma_porta=True)
+            return False
+        self.log.flush()
+        with open(self.log.name) as f:
+            fim = f.read()[-1500:]
+        self.mostrar_erro(f'O cérebro parou (código {codigo}).\n\n{fim}')
+        return False
+
+    def esperar_cerebro(self):
+        if self.cerebro.poll() is not None:
+            self.log.flush()
+            with open(self.log.name) as f:
+                fim = f.read()[-1500:]
+            self.mostrar_erro(f'O cérebro parou (código {self.cerebro.returncode}).\n\n{fim}')
+            return False
+        try:
+            urllib.request.urlopen(f'http://127.0.0.1:{self.porta}/config', timeout=1).read()
+        except Exception:
+            self.tentativas += 1
+            if self.tentativas > 150:
+                self.mostrar_erro('O cérebro não respondeu em 30 segundos. Veja ' + self.log.name)
+                return False
+            return True
+        if getattr(self, 'religando', False):
+            self.religando = False
+        else:
+            self.abrir_tela()
+        GLib.timeout_add(1000, self.vigiar_cerebro)
+        return False
+
+    def abrir_tela(self):
+        os.makedirs(CACHE, exist_ok=True)
+        sessao = WebKit.NetworkSession.new(os.path.join(DADOS, 'web'), os.path.join(CACHE, 'web'))
+        # A página do escritório conversa com a janela pelo canal "navegador":
+        # é assim que o computador do jogo abre um navegador de verdade.
+        conteudo = WebKit.UserContentManager()
+        conteudo.register_script_message_handler('navegador', None)
+        conteudo.connect('script-message-received::navegador', self.mensagem_navegador)
+        conteudo.register_script_message_handler('janela', None)
+        conteudo.connect('script-message-received::janela', self.mensagem_janela)
+        self.web = WebKit.WebView(network_session=sessao, user_content_manager=conteudo)
+        self.web.connect('decide-policy', self.decidir)
+        self.web.load_uri(f'http://127.0.0.1:{self.porta}/')
+        # O navegador do computador do jogo: um WebKit de verdade, por cima da
+        # área do navegador na tela do computador (posição informada pela página).
+        self.navegador = WebKit.WebView(network_session=sessao)
+        self.navegador.set_halign(Gtk.Align.START)
+        self.navegador.set_valign(Gtk.Align.START)
+        self.navegador.set_visible(False)
+        self.navegador.connect('notify::uri', self.navegador_mudou)
+        self.navegador.connect('create', self.navegador_nova_janela)
+        sobre = Gtk.Overlay()
+        sobre.set_child(self.web)
+        sobre.add_overlay(self.navegador)
+        self.janela.set_child(sobre)
+
+    def mensagem_janela(self, _gerente, valor):
+        # F11 / menu: tela cheia de verdade (a janela inteira, sem bordas).
+        try:
+            dados = json.loads(valor.to_json(0))
+        except Exception:
+            return
+        if dados.get('acao') == 'telaCheia':
+            if self.janela.is_fullscreen():
+                self.janela.unfullscreen()
+            else:
+                self.janela.fullscreen()
+
+    def mensagem_navegador(self, _gerente, valor):
+        try:
+            dados = json.loads(valor.to_json(0))
+        except Exception:
+            return
+        acao = dados.get('acao')
+        nav = self.navegador
+        if acao in ('abrir', 'mover'):
+            x, y = max(0, int(dados.get('x', 0))), max(0, int(dados.get('y', 0)))
+            w, h = max(50, int(dados.get('w', 400))), max(50, int(dados.get('h', 300)))
+            nav.set_margin_start(x)
+            nav.set_margin_top(y)
+            nav.set_size_request(w, h)
+            nav.set_visible(True)
+            if acao == 'abrir' and dados.get('url', '').startswith(('http://', 'https://')):
+                nav.load_uri(dados['url'])
+        elif acao == 'esconder':
+            nav.set_visible(False)
+        elif acao == 'fechar':
+            nav.set_visible(False)
+            nav.load_uri('about:blank')
+        elif acao == 'voltar' and nav.can_go_back():
+            nav.go_back()
+        elif acao == 'avancar' and nav.can_go_forward():
+            nav.go_forward()
+        elif acao == 'recarregar':
+            nav.reload()
+
+    def navegador_mudou(self, nav, _param):
+        uri = nav.get_uri() or ''
+        if uri and uri != 'about:blank':
+            script = f'window.__navegadorNativo && window.__navegadorNativo({json.dumps({"url": uri})})'
+            self.web.evaluate_javascript(script, -1, None, None, None, None, None)
+
+    def navegador_nova_janela(self, nav, acao):
+        # Links que abririam outra janela abrem no próprio navegador do computador.
+        uri = acao.get_request().get_uri()
+        if uri:
+            nav.load_uri(uri)
+        return None
+
+    def decidir(self, _web, decisao, tipo):
+        # Nada abre fora do jogo: links para fora (e qualquer "nova janela")
+        # vão para o navegador do próprio jogo.
+        if tipo in (WebKit.PolicyDecisionType.NAVIGATION_ACTION, WebKit.PolicyDecisionType.NEW_WINDOW_ACTION):
+            acao = decisao.get_navigation_action()
+            uri = acao.get_request().get_uri() or ''
+            nosso = uri.startswith(f'http://127.0.0.1:{self.porta}')
+            if tipo == WebKit.PolicyDecisionType.NEW_WINDOW_ACTION or not nosso:
+                if uri.startswith(('http://', 'https://')):
+                    script = f'window.__abrirNoJogo && window.__abrirNoJogo({json.dumps(uri)})'
+                    self.web.evaluate_javascript(script, -1, None, None, None, None, None)
+                decisao.ignore()
+                return True
+        return False
+
+    # ---------- fim do expediente ----------
+    def desligar(self):
+        if not self.cerebro or self.cerebro.poll() is not None:
+            return
+        try:
+            os.killpg(self.cerebro.pid, signal.SIGTERM)
+            self.cerebro.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(self.cerebro.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    # Fechar a janela = fim do expediente de verdade: cada um salva o que estava
+    # fazendo (commit na própria mesa), vai embora, o chefe apaga as luzes.
+    # Fechar de novo durante isso fecha na hora.
+    def ao_fechar(self, janela):
+        if self.fechando or not self.cerebro or self.cerebro.poll() is not None or not hasattr(self, 'web'):
+            self.desligar()
+            return False
+        self.fechando = True
+        janela.set_title('Escritório Pixel: encerrando o expediente…')
+
+        def encerrar():
+            espera = 8000  # tempo da cena: todos saindo, luzes apagando
+            try:
+                pedido = urllib.request.Request(
+                    f'http://127.0.0.1:{self.porta}/expediente/encerrar', data=b'{}', method='POST',
+                    headers={'content-type': 'application/json'})
+                resposta = urllib.request.urlopen(pedido, timeout=30).read().decode()
+                if 'já encerrando' in resposta:
+                    espera = 300  # o dia já tinha sido encerrado pelo botão
+            except Exception:
+                espera = 300
+            GLib.idle_add(lambda: GLib.timeout_add(espera, self.fechar_de_vez) and False)
+
+        threading.Thread(target=encerrar, daemon=True).start()
+        return True  # segura a janela aberta enquanto o expediente encerra
+
+    def fechar_de_vez(self):
+        self.desligar()
+        self.quit()
+        return False
+
+    def do_shutdown(self):
+        self.desligar()
+        Gtk.Application.do_shutdown(self)
+
+
+if __name__ == '__main__':
+    app = Escritorio()
+    for sinal in (signal.SIGINT, signal.SIGTERM):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sinal, app.quit)
+    sys.exit(app.run(sys.argv))
