@@ -13,15 +13,30 @@ Um escritório em pixel art onde funcionários de IA trabalham de verdade: por t
    ```
 3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez: confirme a conta Claude (assinatura Pro ou Max), dê nome ao primeiro projeto, e o chefe chega.
 
-## Como funciona
+## Como jogar
 
-Você é o gestor. Converse com o **chefe** (Opus) no painel: diga o que quer construir. Ele planeja, distribui o trabalho e, se faltar gente, **pede para contratar** (o pedido aparece em "Pedidos na sua mesa"). Você também pode contratar quando quiser em **+ Contratar alguém**: júnior (rápido e barato), pleno (equilíbrio) ou sênior (o mais capaz).
+Você é o **gestor**. Ande pelo escritório com **WASD** ou as setas (ou clique onde quer ir). Chegue perto de algo e aperte **E**.
 
-Cada funcionário trabalha numa cópia própria do projeto; ao terminar, o trabalho entra na versão principal e o chefe revisa e te conta, com a evidência de quem fez. Clique em alguém para ver o que está fazendo e o log técnico.
+- **Converse** com o **chefe ★** (Opus): diga o que quer construir. Ele planeja, distribui e, se faltar gente, **pede para contratar**. Fale com qualquer um de perto (E) ou pelo ramal (painel).
+- **Contrate** em "+ Contratar alguém": júnior, pleno, sênior e especialistas (designer, redator, pesquisador, QA, arquiteto, T.I.), cada um com o guia do seu ofício.
+- **Computadores:** sente numa mesa vaga ou na sua para abrir um **terminal de verdade**; na mesa de quem está trabalhando, você **vê a tela** da pessoa ao vivo e pode sentar junto.
+- **Cofre:** histórico e **desfazer** entregas. **Roteador:** liga/desliga a internet da equipe. **Ar:** a temperatura é a carga real do PC. **TV:** jornal do dia com notícias reais. **Estante:** diário do escritório.
+- **Ficha** (clique em alguém): humor, elogiar, bronca, férias, desligar, tarefa direta, log técnico.
+- **Expediente:** o escritório abre quando você abre o app (luzes, chegada, daily) e fecha quando você fecha: cada um salva o trabalho, anota onde parou e vai embora. No dia seguinte, continuam de onde pararam.
 
-O pacote já traz o Claude Code; o `dnf` instala o resto (Node.js, git, GTK, WebKit). Fechar a janela desliga o escritório e os funcionários. Os projetos ficam em `~/escritorio-projetos`; o log do cérebro em `~/.local/share/escritorio-pixel/`.
+| No escritório | O que está acontecendo de verdade |
+| --- | --- |
+| Digitando na mesa | Escrevendo ou editando arquivos |
+| Na estante com um livro | Lendo arquivos, buscando, pesquisando |
+| Cafezinho | Esperando um comando rodar (teste, build, instalação) |
+| Indo até a sua mesa | Pedindo permissão, pedindo contratação ou entregando com evidência |
+| Banheiro ("já volto") | Compactando o contexto |
+| Almoço | Cota da conta perto do limite; voltam quando renova |
+| Tela azul / "meu PC travou" | Erro na sessão; o chefe pode chamar o T.I. |
+| Calor | Carga real do computador |
+| Bebedouro, sofá, janela, plantas | Vida: só quem não está trabalhando |
 
-Para gerar o pacote: `npm run rpm` (precisa de `rpmbuild`).
+Cada funcionário trabalha numa cópia própria do projeto (git worktree, branch `mesa/<nome>`); ao terminar, o trabalho entra na versão principal. Os projetos ficam em `~/escritorio-projetos`; os dados do escritório em `~/.local/share/escritorio-pixel/`.
 
 ## Rodar pelo código-fonte
 

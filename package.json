@@ -1,6 +1,6 @@
 {
   "name": "escritorio-pixel",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -21,6 +21,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "esbuild": "^0.25.12",
     "typescript": "^7.0.2"
   },

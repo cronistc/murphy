@@ -25,6 +25,14 @@ const ICONE: Record<Evento['tipo'], string> = {
   contratacao_respondida: '🤝',
   tarefa_delegada: '📌',
   integracao: '🔀',
+  expediente: '🏢',
+  humor: '🙂',
+  almoco: '🍽️',
+  agenda: '📰',
+  aniversario: '🎂',
+  maquina: '🌡️',
+  cofre: '🗄️',
+  config: '⚙️',
 };
 
 export function formatar(ev: Evento): string {
@@ -78,6 +86,30 @@ export function formatar(ev: Evento): string {
       break;
     case 'integracao':
       corpo = `${ev.funcionario}: ${ev.ok ? 'OK' : 'FALHOU'} ${ev.mensagem}`;
+      break;
+    case 'expediente':
+      corpo = `${ev.fase}${ev.luzCaiu ? ' (a luz caiu)' : ''} ${ev.daily ?? ev.resumo ?? ''}`;
+      break;
+    case 'humor':
+      corpo = `${ev.funcionario}: ${ev.humor} (${ev.motivo})`;
+      break;
+    case 'almoco':
+      corpo = ev.ate ? `até ${ev.ate} (${ev.motivo ?? ''})` : 'voltaram do almoço';
+      break;
+    case 'agenda':
+      corpo = `jornal com ${ev.agenda.jornal.length} notícias; falas para ${Object.keys(ev.agenda.falas).length}`;
+      break;
+    case 'aniversario':
+      corpo = ev.funcionario;
+      break;
+    case 'maquina':
+      corpo = `carga ${ev.carga} → ${ev.temperatura}°C`;
+      break;
+    case 'cofre':
+      corpo = `${ev.acao}: ${ev.assunto}`;
+      break;
+    case 'config':
+      corpo = `internet=${ev.internet} aprovarTudo=${ev.aprovarTudo}`;
       break;
     case 'tarefa_delegada':
       corpo = `${ev.de} → ${ev.para}: ${encurtar(ev.tarefa, 120)}`;

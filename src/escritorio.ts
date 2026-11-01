@@ -143,6 +143,46 @@ export class Escritorio {
     }
   }
 
+  // Fim do expediente: o que estiver pela metade vira um commit na branch da
+  // mesa (não vai para a principal). Nada se perde.
+  salvarMesa(m: Mesa, quem: string): boolean {
+    if (!fs.existsSync(m.pasta) || !git(m.pasta, 'status', '--porcelain')) return false;
+    git(m.pasta, 'add', '-A');
+    git(m.pasta, 'commit', '-q', '-m', `Fim do expediente: trabalho em andamento de ${quem}`);
+    return true;
+  }
+
+  // O cofre: o histórico da branch principal (cada entrega é um merge).
+  historico(n = 60): { hash: string; assunto: string; autor: string; em: string; merge: boolean }[] {
+    const saida = tenta(() => git(this.projeto, 'log', '--first-parent', this.principal(), `-n${n}`, '--format=%H%x1f%P%x1f%s%x1f%an%x1f%aI'));
+    if (!saida) return [];
+    return saida.split('\n').map((l) => {
+      const [hash, pais, assunto, autor, em] = l.split('\x1f');
+      return { hash, assunto, autor, em, merge: pais.split(' ').length > 1 };
+    });
+  }
+
+  mostrar(hash: string): string {
+    if (!/^[0-9a-f]{7,40}$/.test(hash)) throw new Error('commit inválido');
+    return git(this.projeto, 'show', '--stat', '--format=%h %s%n%an, %ad%n', '--date=format:%d/%m/%Y %H:%M', hash).slice(0, 20000);
+  }
+
+  // Desfaz uma entrega com um commit novo (git revert): o histórico fica
+  // inteiro e dá para desfazer o desfazer.
+  desfazer(hash: string): string {
+    if (!/^[0-9a-f]{7,40}$/.test(hash)) throw new Error('commit inválido');
+    if (git(this.projeto, 'status', '--porcelain')) throw new Error('a pasta principal tem alterações não salvas');
+    const pais = git(this.projeto, 'rev-list', '--parents', '-n1', hash).split(' ').length - 1;
+    if (pais === 0) throw new Error('não dá para desfazer o começo do projeto');
+    try {
+      git(this.projeto, 'revert', '--no-edit', ...(pais > 1 ? ['-m', '1'] : []), hash);
+    } catch (e) {
+      tenta(() => git(this.projeto, 'revert', '--abort'));
+      throw new Error('não deu para desfazer sem conflito; desfaça antes as entregas mais novas');
+    }
+    return git(this.projeto, 'log', '-1', '--format=%s', hash);
+  }
+
   // Instruções anexadas ao system prompt de quem trabalha numa mesa.
   instrucoes(m: Mesa): string {
     return [

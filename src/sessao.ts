@@ -31,6 +31,7 @@ export type OpcoesSessao = {
   mcpServers?: Record<string, any>; // ferramentas do escritório (ex.: as do chefe)
   ferramentasLiberadas?: string[]; // rodam sem pedir permissão
   ferramentasProibidas?: string[]; // nem aparecem para o modelo
+  conversa?: boolean; // conversa com o gestor (não é trabalho): o personagem não sai do lugar
 };
 
 // Emite: 'evento' (Evento normalizado) e 'bruto' (mensagem original do SDK).
@@ -56,7 +57,7 @@ export class Sessao extends EventEmitter {
 
   async rodar(): Promise<void> {
     const { pasta, tarefa, modelo = 'sonnet', funcionario, branch, instrucoes, retomar } = this.opcoes;
-    this.emitir({ tipo: 'sessao_iniciada', pasta, modelo, tarefa, funcionario, branch });
+    this.emitir({ tipo: 'sessao_iniciada', pasta, modelo, tarefa, funcionario, branch, ...(this.opcoes.conversa ? { conversa: true } : {}) });
 
     try {
       const fluxo = query({
@@ -143,6 +144,7 @@ export class Sessao extends EventEmitter {
               idChamada: bloco.id,
               ferramenta: bloco.name,
               resumo: resumirEntrada(bloco.name, bloco.input ?? {}),
+              detalhe: detalharEntrada(bloco.name, bloco.input ?? {}),
             });
           }
         }
@@ -157,6 +159,7 @@ export class Sessao extends EventEmitter {
               idChamada: bloco.tool_use_id,
               erro: Boolean(bloco.is_error),
               resumo: encurtar(textoDoResultado(bloco.content), 160),
+              detalhe: textoDoResultado(bloco.content).slice(0, 4000),
             });
           }
         }
@@ -216,6 +219,21 @@ function textoDoResultado(c: unknown): string {
   if (typeof c === 'string') return c;
   if (Array.isArray(c)) return c.map((b) => (b?.type === 'text' ? b.text : `[${b?.type}]`)).join(' ');
   return '';
+}
+
+// O que aparece na "tela" do funcionário: o comando inteiro, o arquivo escrito, a edição.
+export function detalharEntrada(ferramenta: string, e: Record<string, any>): string {
+  const corta = (t: unknown) => String(t ?? '').slice(0, 4000);
+  switch (ferramenta) {
+    case 'Bash':
+      return `$ ${corta(e.command)}`;
+    case 'Write':
+      return `# ${e.file_path}\n${corta(e.content)}`;
+    case 'Edit':
+      return `# ${e.file_path}\n- ${corta(e.old_string).replace(/\n/g, '\n- ')}\n+ ${corta(e.new_string).replace(/\n/g, '\n+ ')}`;
+    default:
+      return corta(JSON.stringify(e, null, 2));
+  }
 }
 
 export function resumirEntrada(ferramenta: string, e: Record<string, any>): string {

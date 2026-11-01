@@ -1,73 +1,8 @@
-// Lógica pura do escritório: o mapa, caminhos e a tradução de eventos reais em
-// comportamento. Sem DOM, para poder ser testada no Node.
-//
-// Princípio 1: todo comportamento de trabalho vem de um evento real. Esta
-// tabela é a única fonte de verdade de "o que o personagem está fazendo".
+// A única tabela evento real → comportamento do personagem (princípio 1:
+// todo comportamento de trabalho corresponde a um estado técnico real).
+// Lógica pura, sem DOM, testável no Node. O mapa fica em mapa.js.
 
-export const TILE = 16;
-export const LARGURA = 24;
-export const ALTURA = 14;
-
-// ---------- mapa ----------
-// Objetos ocupam tiles (bloqueados); "lugares" são tiles onde alguém fica.
-
-export const MESAS = [
-  // mesa ocupa (x,y) e (x+1,y); a cadeira/assento fica em (x, y+1)
-  { x: 8, y: 4 }, { x: 11, y: 4 }, { x: 14, y: 4 }, { x: 17, y: 4 },
-  { x: 8, y: 8 }, { x: 11, y: 8 }, { x: 14, y: 8 }, { x: 17, y: 8 },
-].map((m, i) => ({ ...m, id: i, assento: { x: m.x, y: m.y + 1 } }));
-
-export const OBJETOS = {
-  estante: { x: 1, y: 2, w: 3, h: 1 },
-  balcaoCafe: { x: 20, y: 2, w: 3, h: 1 },
-  mesaChefe: { x: 2, y: 9, w: 3, h: 1 },
-  cadeiraChefe: { x: 3, y: 8, w: 1, h: 1 },
-  planta1: { x: 1, y: 12, w: 1, h: 1 },
-  planta2: { x: 22, y: 12, w: 1, h: 1 },
-  planta3: { x: 6, y: 2, w: 1, h: 1 },
-};
-
-export const LUGARES = {
-  estante: [{ x: 1, y: 3 }, { x: 2, y: 3 }, { x: 3, y: 3 }],
-  cafe: [{ x: 20, y: 3 }, { x: 21, y: 3 }, { x: 22, y: 3 }, { x: 21, y: 4 }],
-  chefe: [{ x: 3, y: 10 }, { x: 2, y: 10 }, { x: 4, y: 10 }, { x: 5, y: 10 }, { x: 1, y: 10 }],
-  porta: { x: 6, y: 13 },
-  banheiro: { x: 23, y: 11 },
-};
-
-export function bloqueado(x, y) {
-  if (x < 0 || y < 0 || x >= LARGURA || y >= ALTURA) return true;
-  if (x === LUGARES.porta.x && y === LUGARES.porta.y) return false;
-  if (x === LUGARES.banheiro.x && y === LUGARES.banheiro.y) return false;
-  if (y <= 1 || y === ALTURA - 1 || x === 0 || x === LARGURA - 1) return true; // paredes
-  for (const o of Object.values(OBJETOS)) {
-    if (x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h) return true;
-  }
-  for (const m of MESAS) if (y === m.y && (x === m.x || x === m.x + 1)) return true;
-  return false;
-}
-
-// Caminho em tiles (BFS, 4 direções). Inclui o destino, exclui a origem.
-export function caminho(de, para) {
-  const chave = (p) => p.y * LARGURA + p.x;
-  const anterior = new Map([[chave(de), null]]);
-  const fila = [de];
-  while (fila.length) {
-    const p = fila.shift();
-    if (p.x === para.x && p.y === para.y) {
-      const rota = [];
-      for (let q = p; q && chave(q) !== chave(de); q = anterior.get(chave(q))) rota.unshift(q);
-      return rota;
-    }
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const n = { x: p.x + dx, y: p.y + dy };
-      if (anterior.has(chave(n)) || bloqueado(n.x, n.y)) continue;
-      anterior.set(chave(n), p);
-      fila.push(n);
-    }
-  }
-  return null;
-}
+export * from './mapa.js';
 
 // ---------- eventos → comportamento ----------
 
@@ -128,7 +63,8 @@ export function comportamento(ev) {
   }
 }
 
-// Onde cada ação acontece.
+// Onde cada ação acontece. Ações de trabalho vêm de eventos; ações de "vida"
+// (bebedouro, sofá, janela…) só acontecem com quem não está trabalhando.
 export function lugarDaAcao(acao) {
   switch (acao) {
     case 'lendo': return 'estante';
@@ -136,7 +72,19 @@ export function lugarDaAcao(acao) {
     case 'pedindo':
     case 'entregando': return 'chefe';
     case 'banheiro': return 'banheiro';
-    case 'almoco': return 'porta';
+    case 'almoco':
+    case 'saindo':
+    case 'ferias': return 'porta';
+    case 'visitando': return 'visita'; // o T.I. na mesa de alguém
+    case 'reuniao': return 'reuniao';
+    case 'bebedouro':
+    case 'sofa':
+    case 'tv':
+    case 'janela':
+    case 'planta': return acao;
     default: return 'mesa'; // pensando, digitando, ocioso, travado
   }
 }
+
+// Ações que são trabalho (vida nunca interrompe trabalho).
+export const TRABALHO = new Set(['pensando', 'digitando', 'lendo', 'cafe', 'pedindo', 'entregando', 'banheiro', 'travado', 'visitando']);

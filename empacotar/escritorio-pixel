@@ -10,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import urllib.request
 
 import gi
@@ -52,6 +53,7 @@ class Escritorio(Gtk.Application):
         self.cerebro = None
         self.porta = None
         self.tentativas = 0
+        self.fechando = False
 
     # ---------- janela ----------
     def do_activate(self):
@@ -139,8 +141,35 @@ class Escritorio(Gtk.Application):
         except ProcessLookupError:
             pass
 
-    def ao_fechar(self, _janela):
+    # Fechar a janela = fim do expediente de verdade: cada um salva o que estava
+    # fazendo (commit na própria mesa), vai embora, o chefe apaga as luzes.
+    # Fechar de novo durante isso fecha na hora.
+    def ao_fechar(self, janela):
+        if self.fechando or not self.cerebro or self.cerebro.poll() is not None or not hasattr(self, 'web'):
+            self.desligar()
+            return False
+        self.fechando = True
+        janela.set_title('Escritório Pixel: encerrando o expediente…')
+
+        def encerrar():
+            espera = 8000  # tempo da cena: todos saindo, luzes apagando
+            try:
+                pedido = urllib.request.Request(
+                    f'http://127.0.0.1:{self.porta}/expediente/encerrar', data=b'{}', method='POST',
+                    headers={'content-type': 'application/json'})
+                resposta = urllib.request.urlopen(pedido, timeout=30).read().decode()
+                if 'já encerrando' in resposta:
+                    espera = 300  # o dia já tinha sido encerrado pelo botão
+            except Exception:
+                espera = 300
+            GLib.idle_add(lambda: GLib.timeout_add(espera, self.fechar_de_vez) and False)
+
+        threading.Thread(target=encerrar, daemon=True).start()
+        return True  # segura a janela aberta enquanto o expediente encerra
+
+    def fechar_de_vez(self):
         self.desligar()
+        self.quit()
         return False
 
     def do_shutdown(self):
