@@ -22,7 +22,9 @@ export type OpcoesSessao = {
   modelo?: string; // 'haiku' | 'sonnet' | 'opus' ou id completo
   // Quem decide permissões (o usuário, pela interface). O cérebro aplica antes
   // a regra de segurança: nada fora da pasta do projeto.
-  decidirPermissao: (pedido: PedidoPermissao) => Promise<Decisao>;
+  // Sem isso, tudo o que fica dentro da pasta é liberado sem perguntar (o
+  // escritório trabalha com autonomia); fora da pasta é sempre negado.
+  decidirPermissao?: (pedido: PedidoPermissao) => Promise<Decisao>;
   executavelClaude?: string;
   funcionario?: string; // quem está sentado nesta mesa
   branch?: string; // branch git da mesa (worktree)
@@ -70,7 +72,8 @@ export class Sessao extends EventEmitter {
           permissionMode: 'default',
           // Só configurações do próprio projeto; nada do perfil do usuário vaza.
           settingSources: ['project'],
-          env: ambienteLimpo(),
+          // ferramentas do escritório podem esperar o gestor (pedido de acesso): até 15 min
+          env: { ...ambienteLimpo(), MCP_TOOL_TIMEOUT: '900000' },
           ...(retomar ? { resume: retomar } : {}),
           ...(this.opcoes.mcpServers ? { mcpServers: this.opcoes.mcpServers } : {}),
           ...(this.opcoes.ferramentasLiberadas ? { allowedTools: this.opcoes.ferramentasLiberadas } : {}),
@@ -98,11 +101,18 @@ export class Sessao extends EventEmitter {
   private async pedirPermissao(ferramenta: string, entrada: Record<string, unknown>, bloqueado?: string) {
     const idPedido = randomUUID().slice(0, 8);
     const resumo = resumirEntrada(ferramenta, entrada);
+    // blockedPath: a CLI detectou um caminho fora dos diretórios permitidos (ex.: dentro de um comando Bash).
+    // A CLI às vezes marca caminhos que estão dentro da pasta; vale a nossa regra.
+    const foraDeVerdade = bloqueado && caminhoForaDaPasta({ path: bloqueado }, this.opcoes.pasta) ? bloqueado : null;
+    const fora = foraDeVerdade ?? caminhoForaDaPasta(entrada, this.opcoes.pasta);
+    if (!this.opcoes.decidirPermissao) {
+      if (!fora) return { behavior: 'allow' as const, updatedInput: entrada };
+      this.emitir({ tipo: 'permissao_respondida', idPedido, aprovada: false, motivo: `fora da pasta do projeto: ${fora}` });
+      return { behavior: 'deny' as const, message: `Não permitido: ${fora} fica fora da pasta do projeto. Trabalhe só dentro dela.` };
+    }
     this.emitir({ tipo: 'permissao_pedida', idPedido, ferramenta, resumo });
 
     let decisao: Decisao;
-    // blockedPath: a CLI detectou um caminho fora dos diretórios permitidos (ex.: dentro de um comando Bash).
-    const fora = bloqueado ?? caminhoForaDaPasta(entrada, this.opcoes.pasta);
     if (fora) {
       decisao = { aprovada: false, motivo: `fora da pasta do projeto: ${fora}` };
     } else {

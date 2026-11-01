@@ -187,6 +187,7 @@
   .slot-login { height: min(56vh, 560px); border: 3px solid var(--tinta); margin: 8px 0; }
   #boasvindas .cartao.com-login { max-width: 1000px; width: 100%; }
   #pergunta { z-index: 40; }
+  #perguntaTexto { white-space: pre-line; }
   .leitura { position: absolute; inset: 0; overflow: auto; padding: 18px 26px; font: 16px/1.55 system-ui, sans-serif; background: #fbfaf6; color: #222; }
   .leitura h1, .leitura h2, .leitura h3 { font-family: system-ui, sans-serif; color: #111; text-transform: none; letter-spacing: 0; margin: 14px 0 6px; }
   .leitura a { color: #2457b8; cursor: pointer; text-decoration: underline; display: block; margin: 2px 0; }
@@ -202,7 +203,97 @@
   .caminho { padding: 6px 10px; font-size: 14px; color: #5a6275; display: flex; gap: 6px; align-items: center; background: #f0f2f7; border-bottom: 2px solid #dde1ea; }
   #editorTexto { width: 100%; height: 100%; border: 0; resize: none; background: #1b1f29; color: #e6ebf5; font: 13px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; padding: 12px; tab-size: 2; box-shadow: none; }
   #terminal { position: absolute; inset: 0; background: #0f0d14; padding: 6px; }
-  .tarefas-pc { display: flex; gap: 4px; padding: 5px 8px; background: #1b1f29; border-top: 3px solid var(--tinta); }
+  .barra-tarefas { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #1b1f29; border-top: 3px solid var(--tinta); }
+  .barra-tarefas .iniciar { background: #3a7bd5; color: #fff; font-size: 14px; padding: 3px 12px; box-shadow: inset -2px -2px 0 #22508f, inset 2px 2px 0 #6aa0ea; }
+  .barra-tarefas .bandeja { background: transparent; box-shadow: none; color: #dbe2f0; font-size: 15px; padding: 2px 6px; position: relative; }
+  .barra-tarefas .relogio { font-size: 15px; min-width: 52px; text-align: right; }
+  #compNovos { position: absolute; top: -4px; right: -4px; background: #e5675f; color: #fff; font-size: 11px; padding: 0 4px; border: 2px solid var(--tinta); }
+  .tarefas-pc { flex: 1; display: flex; gap: 4px; overflow: hidden; }
+  .menu-iniciar { position: absolute; left: 8px; bottom: 44px; width: 260px; background: #1b1f29; border: 3px solid var(--tinta); box-shadow: 6px 6px 0 #0008; z-index: 3; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .menu-iniciar button { text-align: left; background: transparent; box-shadow: none; color: #e6ebf5; font-size: 15px; padding: 6px 10px; }
+  .menu-iniciar button:hover { background: #2f3850; }
+  .menu-iniciar hr { border: 0; border-top: 2px solid #2f3850; margin: 4px 0; }
+  #computador .cartao { position: relative; }
+  .icone.arrastando { opacity: .4; }
+  .icone.alvo-arrasto { border-color: #f2b84b; }
+  .papeis { display: grid; grid-template-columns: repeat(auto-fill, 120px); gap: 10px; margin: 8px 0 16px; }
+  .papeis button { height: 72px; border: 3px solid #c3c9d6; box-shadow: none; padding: 0; position: relative; }
+  .papeis button.ativo { border-color: #f2b84b; outline: 3px solid #1d2230; }
+  .papeis button span { position: absolute; left: 0; right: 0; bottom: 0; background: #0009; color: #fff; font-size: 12px; padding: 2px; }
+  #cfgCorpo h3 { font: 700 15px system-ui, sans-serif; margin: 12px 0 4px; color: #1d2230; }
+  #cfgCorpo .linha-cfg { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #e3e6ee; font: 14px system-ui, sans-serif; }
+  #cfgCorpo .linha-cfg span { flex: 1; }
+  #cfgCorpo button { background: #fff; color: #1d2230; box-shadow: inset -2px -2px 0 #b9bfcc, inset 2px 2px 0 #fff; padding: 2px 9px; font-weight: 400; font-size: 13px; }
+  #cfgCorpo input { background: #fff; color: #1d2230; border: 2px solid #c3c9d6; padding: 4px 8px; font: 14px system-ui, sans-serif; box-shadow: none; }
+  /* explorador de arquivos */
+  #expRaiz { position: relative; }
+  .exp { position: absolute; inset: 0; display: flex; flex-direction: column; font: 14px system-ui, sans-serif; color: #1d2230; background: #fff; }
+  .exp button { background: #fff; color: #1d2230; box-shadow: none; border: 1px solid #c9cfdb; padding: 3px 9px; font: 13px system-ui, sans-serif; border-radius: 3px; }
+  .exp button:hover:not(:disabled) { background: #eaf1ff; border-color: #8fb2ea; }
+  .exp button:disabled { opacity: .4; }
+  .exp-barra { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: #f3f4f8; border-bottom: 1px solid #d9dde6; }
+  .exp-trilha { flex: 1; display: flex; align-items: center; gap: 2px; background: #fff; border: 1px solid #c9cfdb; padding: 3px 6px; min-height: 28px; overflow: hidden; white-space: nowrap; border-radius: 3px; }
+  .exp-migalha { padding: 1px 6px; cursor: pointer; border-radius: 3px; } .exp-migalha:hover { background: #eaf1ff; } .exp-sep { color: #8a90a0; }
+  .exp-busca { width: 220px; background: #fff; color: #1d2230; border: 1px solid #c9cfdb; padding: 4px 8px; font: 13px system-ui, sans-serif; box-shadow: none; border-radius: 3px; }
+  .exp-vistas { display: flex; } .exp-vistas button.ativo { background: #dbe7fb; border-color: #8fb2ea; }
+  .exp-acoes { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border-bottom: 1px solid #e3e6ee; background: #fafbfd; flex-wrap: wrap; }
+  .exp-acoes .sep { width: 1px; height: 20px; background: #d9dde6; margin: 0 4px; } .exp-espaco { flex: 1; }
+  .exp-ocultos { font-size: 12px; color: #5a6275; display: flex; align-items: center; gap: 4px; }
+  .exp-ocultos input { width: auto; margin: 0; box-shadow: none; }
+  .exp-corpo { flex: 1; display: flex; min-height: 0; }
+  .exp-lateral { width: 230px; flex: none; overflow: auto; background: #f6f7fb; border-right: 1px solid #e3e6ee; padding: 6px 0; }
+  .exp-grupo { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8a90a0; padding: 10px 14px 4px; }
+  .exp-lugar { padding: 5px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid transparent; }
+  .exp-lugar.filho { padding-left: 32px; font-size: 13px; color: #3a4256; }
+  .exp-lugar:hover { background: #eaf1ff; } .exp-lugar.ativo { background: #dbe7fb; border-left-color: #3a7bd5; font-weight: 600; }
+  .exp-main { flex: 1; overflow: auto; outline: none; position: relative; }
+  .exp-tabela { width: 100%; border-collapse: collapse; }
+  .exp-tabela th { position: sticky; top: 0; background: #fff; text-align: left; font-weight: 600; font-size: 12px; color: #5a6275; padding: 6px 10px; border-bottom: 1px solid #e3e6ee; cursor: pointer; user-select: none; }
+  .exp-tabela th:hover { background: #f3f6fb; }
+  .exp-tabela td { padding: 5px 10px; border-bottom: 1px solid #f0f2f6; white-space: nowrap; color: #4a5266; font-size: 13px; }
+  .exp-tabela td.exp-cel-nome { color: #1d2230; font-size: 14px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+  .exp-item { user-select: none; }
+  .exp-tabela tr.exp-item:hover td { background: #f3f7ff; }
+  .exp-item.sel td, .exp-bloco.sel { background: #dbe7fb !important; }
+  .exp-item.recortado { opacity: .5; } .exp-item.arrastado { opacity: .4; }
+  .soltar-aqui, .exp-item.soltar-aqui td { outline: 2px dashed #3a7bd5; background: #eaf1ff !important; }
+  .exp-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; padding: 12px; }
+  .exp-bloco { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 6px; border: 1px solid transparent; border-radius: 4px; text-align: center; cursor: default; }
+  .exp-bloco:hover { background: #f3f7ff; border-color: #dbe7fb; }
+  .exp-ico { font-size: 42px; line-height: 1.1; } .exp-mini { width: 96px; height: 72px; object-fit: cover; border: 1px solid #e3e6ee; background: #fafafa; }
+  .exp-nome { font-size: 13px; word-break: break-word; max-width: 110px; } .exp-de { font-size: 11px; color: #8a90a0; }
+  .exp-ren { width: 100%; font: 13px system-ui, sans-serif; padding: 1px 4px; border: 1px solid #3a7bd5; background: #fff; color: #1d2230; box-shadow: none; }
+  .exp-vazio { padding: 40px; text-align: center; color: #8a90a0; }
+  .exp-status { padding: 4px 12px; font-size: 12px; color: #5a6275; background: #f3f4f8; border-top: 1px solid #d9dde6; }
+  .exp-menu { position: absolute; z-index: 5; min-width: 220px; background: #fff; border: 1px solid #c9cfdb; box-shadow: 4px 6px 16px #0003; padding: 4px 0; border-radius: 4px; }
+  .exp-menu button { display: block; width: 100%; text-align: left; border: 0 !important; border-radius: 0 !important; padding: 6px 14px !important; }
+  .exp-menu hr { border: 0; border-top: 1px solid #e3e6ee; margin: 4px 0; }
+  #driveLista { padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-content: start; background: #f6f7fb; }
+  .drive-item { background: #fff; border: 2px solid #dde1ea; padding: 12px; cursor: pointer; font: 14px system-ui, sans-serif; color: #1d2230; position: relative; display: flex; flex-direction: column; gap: 4px; min-height: 120px; }
+  .drive-item:hover { border-color: #3a7bd5; background: #f3f7ff; }
+  .drive-item .ic { font-size: 34px; line-height: 1; }
+  .drive-item .nm { font-weight: 600; word-break: break-word; }
+  .drive-item .sub { color: #6a7286; font-size: 12px; }
+  .drive-item .rec { color: #2a3040; font-size: 13px; background: #fff8e1; padding: 4px 6px; border-left: 3px solid #f2b84b; }
+  .drive-item.novo { border-color: #f2b84b; box-shadow: 0 0 0 2px #f2b84b55; }
+  .drive-item .acoes { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
+  .drive-item:hover .acoes { display: flex; }
+  .drive-item .acoes button { background: #fff; box-shadow: none; border: 1px solid #c3c9d6; padding: 0 5px; font-size: 13px; color: #1d2230; }
+  .drive-vazio { grid-column: 1 / -1; color: #6a7286; font: 14px system-ui, sans-serif; }
+  #docCorpo { background: #fff; }
+  .doc { max-width: 820px; margin: 0 auto; padding: 28px 36px; font: 16px/1.6 system-ui, sans-serif; color: #1d2230; }
+  .doc h1 { font: 700 26px system-ui, sans-serif; margin: 0 0 12px; color: #111; text-transform: none; letter-spacing: 0; }
+  .doc h2 { font: 700 20px system-ui, sans-serif; margin: 20px 0 8px; color: #111; text-transform: none; letter-spacing: 0; }
+  .doc h3 { font: 700 17px system-ui, sans-serif; margin: 16px 0 6px; }
+  .doc code { background: #f0f2f7; padding: 1px 5px; font-size: 14px; } .doc pre { background: #f0f2f7; padding: 10px; overflow: auto; }
+  .doc hr { border: 0; border-top: 2px solid #e3e6ee; margin: 18px 0; } .doc ul, .doc ol { padding-left: 24px; } .doc a { color: #2457b8; }
+  .doc img { max-width: 100%; }
+  .doc p, .doc li, .doc dd { color: #2a3040; }
+  .comp-item { border: 2px solid #dde1ea; background: #fff; padding: 8px 10px; margin-bottom: 8px; font: 14px system-ui, sans-serif; }
+  .comp-item b { font-size: 15px; } .comp-item .sub { color: #6a7286; font-size: 12px; } .comp-item .recado { margin: 6px 0; color: #2a3040; white-space: pre-wrap; }
+  .comp-item.novo { border-color: #f2b84b; }
+  .comp-item button { background: #fff; color: #1d2230; box-shadow: inset -2px -2px 0 #b9bfcc, inset 2px 2px 0 #fff; padding: 2px 9px; font-weight: 400; font-size: 13px; margin-right: 4px; }
+  .pedido textarea { width: 100%; min-height: 54px; margin: 6px 0; font: 17px var(--pixel); }
   .tarefas-pc button { background: #2a3040; color: #dbe2f0; font-weight: 400; font-size: 13px; padding: 3px 10px; box-shadow: inset -2px -2px 0 #1a1f2a, inset 2px 2px 0 #3c4560; }
   .tarefas-pc button.ativa { background: #3c4a6a; }
   #telaFunc { height: 62vh; overflow-y: auto; background: #0f1a14; color: #c9f2d6; border: 3px solid var(--tinta); padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
@@ -290,7 +381,7 @@
       <button class="perigo" id="btnRecomecar">🔄 Recomeçar do zero</button>
     </div>
     <h2 style="margin-top:16px">Bastidores (log técnico)</h2>
-    <label class="chk"><input type="checkbox" id="fAuto"> Aprovar pedidos de permissão automaticamente (nunca fora da pasta do projeto)</label>
+    <p class="vazio">A equipe trabalha sozinha dentro da pasta do projeto (nada fora dela). Só pedidos de acesso a contas ou pagamentos chegam a você, pelo chefe.</p>
     <div class="feed" id="feed"></div>
   </div>
 </div>
@@ -357,15 +448,7 @@
   <div class="cartao px">
     <div class="barra-pc"><b id="pcDono">Computador</b><span id="pcPasta"></span><span class="espaco"></span><span id="pcRelogio"></span><button class="neutro pequeno" id="pcLevantar">levantar</button></div>
     <div class="area-pc" id="areaPc">
-      <div class="icones" id="icones">
-        <button class="icone" data-app="navegador"><span class="img" style="background:#3a7bd5">🌐</span>Navegador</button>
-        <button class="icone" data-app="projeto"><span class="img" style="background:#e08a3a">🖼️</span>Ver o projeto</button>
-        <button class="icone" data-app="arquivos"><span class="img" style="background:#f2b84b">📁</span>Arquivos</button>
-        <button class="icone" data-app="editor"><span class="img" style="background:#6b5aa8">📝</span>Editor</button>
-        <button class="icone" data-app="terminal"><span class="img" style="background:#24232b">⌨️</span>Terminal</button>
-        <button class="icone" data-app="historico"><span class="img" style="background:#5f6b7a">🗄️</span>Histórico</button>
-        <button class="icone" data-app="entregar" id="icoEntregar"><span class="img" style="background:#4cbf6a">📤</span>Entregar meu trabalho</button>
-      </div>
+      <div class="icones" id="icones"></div>
       <div class="janela-pc" id="jan-navegador" hidden>
         <div class="titulo-jan"><b>🌐 Navegador</b><button data-minimizar>—</button></div>
         <div class="slot-nav" id="slotNavPc">
@@ -376,9 +459,8 @@
         </div>
       </div>
       <div class="janela-pc" id="jan-arquivos" hidden>
-        <div class="titulo-jan"><b>📁 Arquivos</b><button data-minimizar>—</button></div>
-        <div class="caminho"><button id="arqSubir">↑ voltar</button><span id="arqCaminho"></span><span style="flex:1"></span><button id="arqNovaPasta">+ pasta</button><button id="arqNovo">+ arquivo</button></div>
-        <div class="conteudo"><table class="arquivos" id="arqLista"></table></div>
+        <div class="titulo-jan"><b>📁 Explorador de arquivos</b><button data-minimizar>—</button></div>
+        <div class="conteudo" id="expRaiz" style="overflow:hidden"></div>
       </div>
       <div class="janela-pc" id="jan-editor" hidden>
         <div class="titulo-jan"><b id="edTitulo">📝 Editor</b><span id="edStatus" style="font-size:13px;color:#5a6275"></span><button id="edSalvar">Salvar (Ctrl+S)</button><button id="edVer">Ver no navegador</button><button data-minimizar>—</button></div>
@@ -388,12 +470,26 @@
         <div class="titulo-jan"><b>⌨️ Terminal</b><button data-minimizar>—</button></div>
         <div class="conteudo" style="background:#0f0d14"><div id="terminal"></div></div>
       </div>
+      <div class="janela-pc" id="jan-doc" hidden>
+        <div class="titulo-jan"><b id="docTitulo">📄 Documento</b><button id="docEditar">editar</button><button id="docVoltar">voltar</button><button data-minimizar>—</button></div>
+        <div class="conteudo" id="docCorpo"></div>
+      </div>
+      <div class="janela-pc" id="jan-config" hidden>
+        <div class="titulo-jan"><b>⚙️ Configurações do computador</b><button data-minimizar>—</button></div>
+        <div class="conteudo" id="cfgCorpo" style="padding:12px 16px"></div>
+      </div>
       <div class="janela-pc" id="jan-historico" hidden>
         <div class="titulo-jan"><b>🗄️ Histórico do projeto</b><button data-minimizar>—</button></div>
         <div class="conteudo" id="histLista" style="padding:10px"></div>
       </div>
     </div>
-    <div class="tarefas-pc" id="tarefasPc"><button data-ir="area" class="ativa">🖥️ Área de trabalho</button></div>
+    <div class="menu-iniciar" id="menuIniciar" hidden></div>
+    <div class="barra-tarefas">
+      <button class="iniciar" id="btnIniciar">▦ Iniciar</button>
+      <div class="tarefas-pc" id="tarefasPc"></div>
+      <button class="bandeja" id="bandejaComp" title="Compartilhados com você">📥<span id="compNovos" hidden></span></button>
+      <span class="bandeja relogio" id="pcRelogioBarra"></span>
+    </div>
     <div class="erro" id="pcErro" style="margin:0;padding:0 10px"></div>
   </div>
 </div>

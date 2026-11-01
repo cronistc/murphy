@@ -23,6 +23,12 @@ export type Evento = EventoBase &
     | { tipo: 'ferramenta_chamada'; idChamada: string; ferramenta: string; resumo: string; detalhe?: string }
     | { tipo: 'ferramenta_resultado'; idChamada: string; erro: boolean; resumo: string; detalhe?: string }
     | { tipo: 'permissao_pedida'; idPedido: string; ferramenta: string; resumo: string }
+    | { tipo: 'acesso_pedido'; idPedido: string; funcionario: string; chefe?: string; oque: string; porque: string }
+    | { tipo: 'acesso_respondido'; idPedido: string; funcionario: string; chefe?: string; aprovado: boolean }
+    | { tipo: 'compartilhado'; funcionario: string; nome: string; mensagem: string; relatorio?: boolean }
+    | { tipo: 'vida'; funcionario: string; fala?: string; para?: string; acao?: string; pensamento?: string }
+    | { tipo: 'aval_pedido'; funcionario: string; chefe: string; oque: string; porque: string }
+    | { tipo: 'aval_respondido'; funcionario: string; chefe: string; aprovado: boolean; orientacao: string }
     | { tipo: 'permissao_respondida'; idPedido: string; aprovada: boolean; motivo: string }
     | { tipo: 'cota'; status: string; janela?: string; uso?: number; renovaEm?: string }
     | { tipo: 'compactacao'; tokensAntes: number; tokensDepois?: number }

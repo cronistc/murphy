@@ -30,6 +30,13 @@ export type Estado = {
   relatorio: Record<string, string>; // o relatório do chefe (vira ESCRITORIO.md no projeto)
   recomendacao?: { cargo: string; motivo: string }[];
   voz?: { chave: string; regiao: string }; // Azure Speech (vozes da Microsoft), opcional
+  // O computador do gestor: papel de parede, ícones da tela inicial (ordem e
+  // quais aparecem) e atalhos para sites.
+  // A vida de cada um fora do trabalho: o que pensou, disse, ouviu e fez (memória curta).
+  vida?: Record<string, { em: string; tipo: 'pensou' | 'disse' | 'ouviu' | 'fez'; texto: string; com?: string }[]>;
+  // por computador (cada um é independente): 'voce', 'principal' ou o id da pessoa
+  computadores?: Record<string, { papel?: string; icones?: string[]; atalhos?: { nome: string; url: string }[] }>;
+  computador?: { papel?: string; icones?: string[]; atalhos?: { nome: string; url: string }[] }; // antigo (1.3 de teste)
 };
 
 export const PASTA_DADOS = path.resolve(

@@ -12,6 +12,7 @@ import {
 } from './comportamento.js';
 import { W, H, desenharMundo, corDoModelo } from './desenho.js';
 import { desenharRetrato } from './retrato.js';
+import { criarExplorador, iconeDe } from './explorador.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -26,6 +27,11 @@ const sessaoConversa = new Set();
 const sessoesFim = new Set();
 const pedidos = new Map();
 const contratacoes = new Map();
+const acessos = new Map(); // pedidos de acesso (conta, senha, pagamento) que o chefe traz
+let ultimaChavePedidos = null;
+let compNovos = 0; // itens novos em Compartilhados
+let configsPc = {}; // personalização de cada computador (cada um é independente)
+let configPc = {}; // a do computador aberto agora
 const conversas = {}; // id → [{de, para, texto, em}]
 const naoLidas = {}; // id → quantas mensagens novas
 const aniversariantes = new Set();
@@ -78,6 +84,8 @@ const VELOCIDADE_VOCE = 5 * T;
 const PERMANENCIA = 1400;
 const TEMPO_ENTREGA = 5000;
 const reservas = new Map();
+
+const baloesNaTela = (agora) => [...personagens.values()].filter((x) => x.fala && agora < x.fala.ate).length;
 
 class Personagem {
   constructor(id, info = {}, indiceMesa = 0) {
@@ -149,7 +157,7 @@ class Personagem {
     if (!this.chegou) return 'andando';
     return {
       ocioso: 'na mesa', pensando: 'pensando', digitando: 'escrevendo', lendo: 'pesquisando na estante',
-      cafe: 'esperando um comando rodar (cafezinho)', pedindo: 'esperando você na sua mesa', entregando: 'na sua mesa',
+      cafe: this.ocupado ? 'esperando um comando rodar (cafezinho)' : this.levando ? 'pegando um café para você' : 'pegando um café', pedindo: 'esperando você na sua mesa', entregando: 'na sua mesa',
       travado: 'com o PC travado', visitando: `ajudando na mesa de ${nomeDe(this.local)}`, reuniao: 'em reunião',
       bebedouro: 'no bebedouro', sofa: 'no sofá', tv: 'vendo o jornal', janela: 'olhando a janela', planta: 'regando as plantas',
     }[this.acao] ?? this.acao;
@@ -174,9 +182,20 @@ class Personagem {
 
   // comVoz: fala de verdade (mensagem completa); balões de trabalho e vida
   // curtinha não precisam de voz.
-  falar(texto, agora = performance.now(), ms, comVoz = true) {
+  // Balões com calma: cada um fica o tempo de ler; o próximo espera na fila
+  // (no máximo dois). Conversa à toa (baixa) só aparece se a pessoa está quieta
+  // e pouca gente está falando.
+  falar(texto, agora = performance.now(), ms, comVoz = true, baixa = false) {
     if (!texto) return;
-    this.fala = { texto, ate: agora + (ms ?? Math.max(3500, texto.length * 70)) };
+    const dur = ms ?? Math.min(12000, Math.max(5000, texto.length * 90));
+    this.filaFala ??= [];
+    if (baixa && (this.fala || this.filaFala.length || baloesNaTela(agora) >= 2)) return;
+    if (this.fala && agora < this.fala.ate) {
+      if (this.filaFala.length >= 2) this.filaFala.shift();
+      this.filaFala.push({ texto, dur });
+      return;
+    }
+    this.fala = { texto, desde: agora, ate: agora + dur };
     if (comVoz) falarEmVoz(this, texto);
   }
 
@@ -264,9 +283,18 @@ class Personagem {
       this.fixo = false;
       if (!this.desejo) this.desejo = { acao: 'ocioso', fixo: false };
     }
-    if (this.fala && agora > this.fala.ate) this.fala = null;
-    if (this.roteiro.length && agora >= this.roteiro[0].em) this.falar(this.roteiro.shift().texto, agora, undefined, false);
+    if (this.fala && agora > this.fala.ate) {
+      this.fala = null;
+      const prox = this.filaFala?.shift();
+      if (prox) this.fala = { texto: prox.texto, desde: agora, ate: agora + prox.dur };
+    }
+    if (this.roteiro.length && agora >= this.roteiro[0].em) this.falar(this.roteiro.shift().texto, agora, undefined, false, true);
     if (this.comCafe && agora > this.comCafe) this.comCafe = 0;
+    if (this.levando && this.acao === 'entregando' && this.chegou) {
+      if (this.levando === 'cafe') { voce.comCafe = agora + 120000; this.falar('Seu café! ☕', agora, 5000, false); } else this.falar('Sua água! 💧', agora, 5000, false);
+      this.levando = null;
+      this.fixo = false;
+    }
 
     let resta = (this.ehVoce ? VELOCIDADE_VOCE : VELOCIDADE) * dt;
     while (resta > 0 && this.rota.length) {
@@ -517,23 +545,40 @@ function vida(p, agora) {
   else if (s < 0.8) atividade = 'sofa';
   else if (s < 0.9) atividade = 'janela';
   else atividade = 'planta';
-  if (atividade === 'ocioso') {
-    if (Math.random() < 0.3) p.falar(aleatorio(falasDe(p)), agora, undefined, false);
-    return;
-  }
+  // Só o andar à toa é decidido aqui; o que eles dizem e pensam vem da cabeça
+  // deles (evento "vida" do cérebro), e fica na memória de cada um.
+  if (atividade === 'ocioso') return;
   p.desejo = { acao: atividade, fixo: false };
-  if (atividade === 'bebedouro') {
-    const colega = [...personagens.values()].find((q) => q !== p && livreParaViver(q, agora) && q.acao === 'ocioso' && Math.random() < 0.6);
-    if (colega) {
-      colega.desejo = { acao: 'bebedouro', fixo: false };
-      colega.proximaVida = p.proximaVida;
-      const t0 = agora + 6000;
-      p.roteiro = [{ em: t0, texto: aleatorio(falasDe(p)) }, { em: t0 + 8000, texto: fofoca() ?? aleatorio(falasDe(p)) }];
-      colega.roteiro = [{ em: t0 + 4000, texto: aleatorio(['Pois é!', 'Nem me fala.', 'Sério?', 'Haha, verdade.']) }, { em: t0 + 12000, texto: aleatorio(falasDe(colega)) }];
-      return;
-    }
+}
+
+// O que a pessoa decidiu fazer (por conta própria ou porque o gestor pediu).
+const ACAO_VIDA = { computador: 'digitando', mesa: 'ocioso', bebedouro: 'bebedouro', cafe: 'cafe', sofa: 'sofa', janela: 'janela', planta: 'planta', tv: 'tv', ir_ate_gestor: 'entregando' };
+function aoVida(ev, instantaneo, agora) {
+  const p = personagens.get(ev.funcionario);
+  if (!p) return;
+  if (ev.pensamento) p.pensamento = { texto: ev.pensamento, em: Date.now() };
+  if (instantaneo) return;
+  if (ev.acao === 'buscar_cafe_gestor' || ev.acao === 'buscar_agua_gestor') {
+    // a cafeteira (ou o bebedouro) e depois a mesa do gestor, com o copo na mão
+    const cafe = ev.acao === 'buscar_cafe_gestor';
+    p.levando = cafe ? 'cafe' : 'agua';
+    p.desejo = { acao: cafe ? 'cafe' : 'bebedouro', fixo: true };
+    setTimeout(() => { if (p.levando) p.desejo = { acao: 'entregando', fixo: true }; }, 7000);
+  } else if (ev.acao === 'ir_ate_colega' && personagens.get(ev.para)) {
+    // vai até a mesa do colega para falar com ele
+    p.local = ev.para;
+    p.desejo = { acao: 'visitando', fixo: true };
+    p.proximaVida = agora + 60_000;
+  } else if (ACAO_VIDA[ev.acao]) {
+    if (ev.acao === 'mesa' && p.acao === 'visitando' && !p.ocupado) p.local = null;
+    p.desejo = { acao: ACAO_VIDA[ev.acao], fixo: ev.acao === 'ir_ate_gestor' };
+    p.proximaVida = agora + 60_000; // não sai andando à toa logo depois
   }
-  p.roteiro = [{ em: agora + 5000, texto: aleatorio(falasDe(p)) }];
+  if (ev.fala) {
+    const alvo = ev.para ? personagens.get(ev.para) : null;
+    p.falar(ev.fala, agora, undefined, false);
+    if (alvo && !alvo.ocupado && ev.acao !== 'mesa') alvo.ocupadoAte = agora + 15000;
+  }
 }
 
 // ---------- expediente na tela ----------
@@ -661,6 +706,34 @@ function aoEvento(ev, instantaneo) {
         recomendacao = ev.itens;
         if (!instantaneo) setTimeout(() => abrirContratacao(), 4500);
         break;
+      case 'acesso_pedido': {
+        acessos.set(ev.idPedido, ev);
+        const quem = personagens.get(ev.chefe ?? ev.funcionario);
+        quem?.receber({ acao: 'pedindo', fixo: true }, instantaneo, agora);
+        if (!instantaneo) notificar(`${nomeDe(ev.chefe ?? ev.funcionario)} traz um pedido ${ev.chefe ? `de ${nomeDe(ev.funcionario)}` : ''}: ${curto(ev.oque, 60)}`);
+        break;
+      }
+      case 'acesso_respondido': {
+        acessos.delete(ev.idPedido);
+        personagens.get(ev.chefe ?? ev.funcionario)?.receber({ acao: 'ocioso', liberar: true, fala: ev.aprovado ? 'Já passo para a equipe.' : 'Combinado, a equipe segue sem.' }, instantaneo, agora);
+        break;
+      }
+      case 'vida': aoVida(ev, instantaneo, agora); break;
+      case 'aval_pedido':
+        if (!instantaneo) {
+          personagens.get(ev.funcionario)?.falar(`${nomeDe(ev.chefe)}, preciso do seu aval: ${curto(ev.oque, 70)}`, agora, 7000, false);
+          setTimeout(() => personagens.get(ev.chefe)?.falar('Deixa eu dar uma olhada…', performance.now(), 5000, false), 2500);
+        }
+        break;
+      case 'aval_respondido':
+        if (!instantaneo) personagens.get(ev.chefe)?.falar(`${nomeDe(ev.funcionario)}: ${ev.aprovado ? 'pode seguir.' : ev.orientacao === 'Vou levar ao gestor.' ? 'isso eu levo ao gestor.' : 'melhor não.'} ${curto(ev.orientacao, 80)}`, agora, 9000, false);
+        break;
+      case 'compartilhado':
+        compNovos++;
+        if (!instantaneo) notificar(`🗂️ ${nomeDe(ev.funcionario)} pôs no Drive: ${curto(ev.mensagem || ev.nome, 70)}`);
+        atualizarBandeja();
+        if (!$('#jan-arquivos').hidden && explorador.local.alvo === 'drive') explorador.recarregar();
+        break;
       case 'contratacao_pedida':
         contratacoes.set(ev.idPedido, ev);
         personagens.get(ev.pedidoPor)?.receber({ acao: 'pedindo', fixo: true }, instantaneo, agora);
@@ -708,7 +781,7 @@ function aoEvento(ev, instantaneo) {
         if (!instantaneo) setTimeout(() => { for (const p of personagens.values()) if (!p.ehVoce && p.cargo && p.id !== ev.funcionario && p.visivel) p.roteiro.push({ em: performance.now() + 2000 + Math.random() * 8000, texto: `Parabéns, ${nomeDe(ev.funcionario)}! 🎂` }); }, 12000);
         break;
       case 'maquina': maquina = ev; break;
-      case 'config': internet = ev.internet; aprovarTudo = ev.aprovarTudo; $('#fAuto').checked = aprovarTudo; break;
+      case 'config': internet = ev.internet; aprovarTudo = ev.aprovarTudo; break;
       case 'cofre': if (!instantaneo) notificar(`Desfeito: ${ev.assunto}`); break;
     }
     if (ev.tipo !== 'maquina') {
@@ -802,10 +875,10 @@ function abrirDialogo(p, iniciativaDele = false) {
   const lista = conversas[p.id] ?? [];
   const ultima = lista[lista.length - 1];
   const recente = ultima && Date.now() - new Date(ultima.em).getTime() < 15 * 60_000;
-  if (recente && ultima.de !== 'voce') mostrarFala(ultima.texto, true);
-  else if (iniciativaDele && ultima && ultima.de !== 'voce') mostrarFala(ultima.texto);
-  else if (p.ferias) mostrarFala('Tô de férias! 🏖️', true);
-  else mostrarFala(aleatorio(p.humor <= 35 ? ['Oi.', 'Fala.'] : ['Oi! Pode falar.', 'Opa, tudo bem?', 'Diga!', `Oi! ${p.ocupado ? 'Tô no meio de uma coisa, mas pode falar.' : 'Tô por aqui.'}`]), true);
+  // Quando foi ela que veio falar, mostra o que ela disse. Se não, a caixa
+  // só mostra que ela está ouvindo; nada de fala pronta ou repetida.
+  if (iniciativaDele && recente && ultima.de !== 'voce') mostrarFala(ultima.texto);
+  else mostrarFala(`(${p.nome} ${p.ferias ? 'está de férias, mas' : p.ocupado ? 'para o que está fazendo e' : ''} olha para você.)`, true);
   atualizarStatusDialogo();
   $('#dlgTexto').value = '';
   setTimeout(() => $('#dlgTexto').focus(), 50);
@@ -1015,9 +1088,9 @@ function sobreposicao() {
     if (!p.visivel || p.id === dialogoCom) continue; // quem está no diálogo fala na caixa
     const topo = (p.pos.y - 18) * s;
     const ct = [...contratacoes.values()].find((e) => e.pedidoPor === p.id);
+    const ac = [...acessos.values()].find((e) => (e.chefe ?? e.funcionario) === p.id);
     if (p.chegou && (p.acao === 'pedindo' || (ct && p.acao === 'entregando'))) {
-      const pd = [...pedidos.values()].find((e) => sessaoParaId.get(e.sessao) === p.id);
-      balao(p.pos.x * s, topo, pd ? `✋ Posso? ${pd.ferramenta}: ${curto(pd.resumo, 48)}` : ct ? `📋 Precisamos contratar: ${curto(ct.motivo, 50)}` : '✋ Com licença…', '#fff1c9', '#f2b84b');
+      balao(p.pos.x * s, topo, ac ? `🔑 ${ac.chefe && ac.chefe !== ac.funcionario ? `${nomeDe(ac.funcionario)} precisa` : 'Preciso'}: ${curto(ac.oque, 50)}` : ct ? `📋 Precisamos contratar: ${curto(ct.motivo, 50)}` : '✋ Com licença…', '#fff1c9', '#f2b84b');
     } else if (p.fala) balao(p.pos.x * s, topo, p.fala.texto);
   }
 }
@@ -1159,11 +1232,14 @@ $('#pedidos').addEventListener('click', async (e) => {
   const aprovar = b.dataset.aprovar === '1';
   try {
     if (b.dataset.tipo === 'contratacao') await api('POST', `/contratacoes/${b.dataset.id}`, { aprovar });
-    else await api('POST', `/permissoes/${b.dataset.id}`, { aprovar });
+    else if (b.dataset.tipo === 'acesso') {
+      const resposta = $(`#pedidos textarea[data-resposta="${b.dataset.id}"]`)?.value.trim() ?? '';
+      if (aprovar && !resposta) { b.disabled = false; return avisar('Escreva a resposta para a equipe (ou use "Não liberar").', 'Falta a resposta'); }
+      await api('POST', `/acessos/${b.dataset.id}`, { resposta, negar: !aprovar });
+    } else await api('POST', `/permissoes/${b.dataset.id}`, { aprovar });
   } catch (err) { b.disabled = false; avisar(err.message); }
 });
-$('#fAuto').addEventListener('change', async (e) => { try { await api('POST', '/config', { aprovarTudo: e.target.checked }); } catch { e.target.checked = !e.target.checked; } });
-$('#btnPasta').addEventListener('click', () => { $('#menu').hidden = true; abrirComputador('principal', 'Projeto principal (versão entregue)'); mostrarApp('arquivos'); listarArquivos(''); });
+$('#btnPasta').addEventListener('click', () => { $('#menu').hidden = true; abrirComputador('principal', 'Projeto principal (versão entregue)'); abrirExplorador({ alvo: 'principal', caminho: '' }); });
 $('#btnNavegadorMenu').addEventListener('click', () => { $('#menu').hidden = true; abrirNoJogo(navHist.lista[navHist.pos] ?? '/previa/principal/'); });
 $('#btnJornalMenu').addEventListener('click', () => { $('#menu').hidden = true; abrirJornal(); });
 $('#btnRecomecar').addEventListener('click', async () => {
@@ -1230,7 +1306,6 @@ $('#janCorpo').addEventListener('click', async (e) => {
 });
 $('#janCorpo').addEventListener('change', async (e) => {
   if (e.target.id === 'wifiInternet') await api('POST', '/config', { internet: e.target.checked }).catch((err) => avisar(err.message));
-  if (e.target.id === 'wifiAuto') await api('POST', '/config', { aprovarTudo: e.target.checked }).catch((err) => avisar(err.message));
 });
 $('#janCorpo').addEventListener('submit', async (e) => {
   if (e.target.id !== 'formVoz') return;
@@ -1250,8 +1325,7 @@ function abrirWifi() {
     <p>A rede define o que os computadores dos funcionários podem fazer.</p>
     <label class="chk"><input type="checkbox" id="wifiInternet" ${internet ? 'checked' : ''}> Internet liberada (pesquisa e navegação na web)</label>
     <p class="vazio">Desligada, os funcionários não pesquisam nem abrem sites (instalar pacotes continua possível).</p>
-    <label class="chk"><input type="checkbox" id="wifiAuto" ${aprovarTudo ? 'checked' : ''}> Aprovar pedidos de permissão automaticamente</label>
-    <p class="vazio">Mesmo assim, nada fora da pasta do projeto é permitido.</p>`);
+    <p class="vazio">A equipe trabalha sem pedir permissão dentro da pasta do projeto; nada fora dela é permitido.</p>`);
 }
 function abrirAr() {
   const m = maquina;
@@ -1355,12 +1429,87 @@ let arqCaminho = '';
 let edArquivo = null;
 let edSujo = false;
 
+// Apps da área de trabalho. A tela inicial (ordem, quais aparecem, atalhos
+// para sites e papel de parede) é personalizável e fica guardada no cérebro.
+const APPS = {
+  navegador: { nome: 'Navegador', ico: '🌐', cor: '#3a7bd5' },
+  projeto: { nome: 'Ver o projeto', ico: '🖼️', cor: '#e08a3a' },
+  arquivos: { nome: 'Explorador de arquivos', ico: '📁', cor: '#f2b84b' },
+  drive: { nome: 'Drive da empresa', ico: '🗂️', cor: '#4cbf6a' },
+  pessoal: { nome: 'Pasta pessoal', ico: '🏠', cor: '#c96f4a' },
+  editor: { nome: 'Editor', ico: '📝', cor: '#6b5aa8' },
+  terminal: { nome: 'Terminal', ico: '⌨️', cor: '#24232b' },
+  historico: { nome: 'Histórico', ico: '🗄️', cor: '#5f6b7a' },
+  config: { nome: 'Configurações', ico: '⚙️', cor: '#8a8f9c' },
+  entregar: { nome: 'Entregar meu trabalho', ico: '📤', cor: '#2f9a55' },
+};
+const ICONES_PADRAO = ['drive', 'pessoal', 'navegador', 'projeto', 'arquivos', 'editor', 'terminal', 'historico', 'config', 'entregar'];
+const PAPEIS = {
+  crepusculo: { nome: 'Crepúsculo', css: 'linear-gradient(160deg, #1f3a5c 0%, #2b2a52 55%, #3a2448 100%)' },
+  oceano: { nome: 'Oceano', css: 'linear-gradient(180deg, #0f4c75 0%, #1b6ca8 45%, #3fa7c9 100%)' },
+  floresta: { nome: 'Floresta', css: 'linear-gradient(170deg, #12372a 0%, #2d6a4f 60%, #74a57f 100%)' },
+  por_do_sol: { nome: 'Pôr do sol', css: 'linear-gradient(180deg, #2b1b3d 0%, #a33f5b 50%, #f2a65a 100%)' },
+  noite: { nome: 'Noite estrelada', css: 'radial-gradient(#ffffffaa 1px, transparent 1.5px) 0 0 / 38px 38px, radial-gradient(#ffffff66 1px, transparent 1.5px) 19px 23px / 53px 53px, linear-gradient(180deg, #0b1026 0%, #1c2350 100%)' },
+  xadrez: { nome: 'Pixel xadrez', css: 'repeating-conic-gradient(#2a3350 0% 25%, #232b45 0% 50%) 0 0 / 32px 32px' },
+  cafe: { nome: 'Café', css: 'linear-gradient(160deg, #3b2a20 0%, #6b4a2b 60%, #a87c4f 100%)' },
+  rosa: { nome: 'Algodão-doce', css: 'linear-gradient(160deg, #f5b3c8 0%, #b9a4f0 55%, #8ec5fc 100%)' },
+  grafite: { nome: 'Grafite', css: '#2a2d34' },
+};
+function carregarConfigPc() {
+  const c = { ...(configsPc[alvoPc] ?? {}) };
+  if (c.icones) c.icones = c.icones.map((x) => (x === 'compartilhados' ? 'drive' : x));
+  if (!c.papel && alvoPc !== 'voce') { const ps = Object.keys(PAPEIS); c.papel = ps[hash(alvoPc) % ps.length]; }
+  configPc = c;
+}
+function iconesDaTela() {
+  const ordem = (configPc.icones?.length ? configPc.icones : ICONES_PADRAO).filter((id) => APPS[id] || id.startsWith('atalho:'));
+  return ordem.filter((id) => !(id === 'entregar' && alvoPc !== 'voce') && !(id === 'pessoal' && alvoPc === 'principal'));
+}
+function aplicarPapel() {
+  $('#areaPc').style.background = (PAPEIS[configPc.papel] ?? PAPEIS.crepusculo).css;
+}
+function renderIcones() {
+  const atalhos = configPc.atalhos ?? [];
+  $('#icones').innerHTML = iconesDaTela().map((id) => {
+    if (id.startsWith('atalho:')) {
+      const a = atalhos[Number(id.slice(7))];
+      return a ? `<button class="icone" draggable="true" data-id="${esc(id)}" data-atalho="${esc(a.url)}"><span class="img" style="background:#3a5f8a">🔗</span>${esc(a.nome)}</button>` : '';
+    }
+    const a = APPS[id];
+    return `<button class="icone" draggable="true" data-id="${id}" data-app="${id}"><span class="img" style="background:${a.cor}">${a.ico}</span>${esc(a.nome)}${id === 'drive' && compNovos ? ` (${compNovos})` : ''}</button>`;
+  }).join('');
+  aplicarPapel();
+}
+async function salvarConfigPc(mudanca) {
+  configPc = { ...configPc, ...mudanca };
+  renderIcones();
+  try { configPc = await api('POST', '/computador', { alvo: alvoPc, ...mudanca }); configsPc[alvoPc] = configPc; } catch (e) { $('#pcErro').textContent = e.message; }
+  if (!$('#jan-config').hidden) renderConfig();
+}
+// arrastar um ícone para outro lugar da tela inicial
+let arrastado = null;
+$('#icones').addEventListener('dragstart', (e) => { arrastado = e.target.closest('.icone')?.dataset.id ?? null; e.target.closest('.icone')?.classList.add('arrastando'); });
+$('#icones').addEventListener('dragend', (e) => { e.target.closest('.icone')?.classList.remove('arrastando'); arrastado = null; });
+$('#icones').addEventListener('dragover', (e) => { if (arrastado) { e.preventDefault(); for (const x of document.querySelectorAll('.icone.alvo-arrasto')) x.classList.remove('alvo-arrasto'); e.target.closest('.icone')?.classList.add('alvo-arrasto'); } });
+$('#icones').addEventListener('drop', (e) => {
+  e.preventDefault();
+  const alvo = e.target.closest('.icone')?.dataset.id;
+  for (const x of document.querySelectorAll('.icone.alvo-arrasto')) x.classList.remove('alvo-arrasto');
+  if (!arrastado || !alvo || alvo === arrastado) return;
+  const ordem = (configPc.icones?.length ? configPc.icones : ICONES_PADRAO).filter((x) => x !== arrastado);
+  ordem.splice(ordem.indexOf(alvo), 0, arrastado);
+  salvarConfigPc({ icones: ordem });
+});
+
 function abrirComputador(alvo, titulo) {
-  if (alvoPc !== alvo) { appsAbertos.clear(); navHist.lista = []; navHist.pos = -1; arqCaminho = ''; edArquivo = null; $('#editorTexto').value = ''; }
+  if (alvoPc !== alvo) { explorandoPc = null; appsAbertos.clear(); navHist.lista = []; navHist.pos = -1; arqCaminho = ''; edArquivo = null; $('#editorTexto').value = ''; }
   alvoPc = alvo;
   $('#pcDono').textContent = titulo;
   $('#pcPasta').textContent = '';
-  $('#icoEntregar').hidden = alvo !== 'voce';
+  $('#menuIniciar').hidden = true;
+  carregarConfigPc();
+  renderIcones();
+  atualizarBandeja();
   $('#pcErro').textContent = '';
   $('#computador').hidden = false;
   voce.noComputador = true;
@@ -1381,27 +1530,136 @@ function mostrarApp(app) {
   for (const j of document.querySelectorAll('.janela-pc')) j.hidden = j.id !== `jan-${app}`;
   $('#icones').style.visibility = app ? 'hidden' : 'visible';
   if (app) appsAbertos.add(app);
-  const nomes = { navegador: '🌐 Navegador', arquivos: '📁 Arquivos', editor: '📝 Editor', terminal: '⌨️ Terminal', historico: '🗄️ Histórico' };
-  $('#tarefasPc').innerHTML = `<button data-ir="area" class="${app ? '' : 'ativa'}">🖥️ Área de trabalho</button>` +
-    [...appsAbertos].map((a) => `<button data-ir="${a}" class="${a === app ? 'ativa' : ''}">${nomes[a]}</button>`).join('');
+  $('#menuIniciar').hidden = true;
+  $('#tarefasPc').innerHTML = `<button data-ir="area" class="${app ? '' : 'ativa'}" title="Mostrar a área de trabalho">🖥️</button>` +
+    [...appsAbertos].map((a) => `<button data-ir="${a}" class="${a === app ? 'ativa' : ''}">${a === 'doc' ? '📄 Documento' : `${APPS[a]?.ico ?? ''} ${esc(APPS[a]?.nome ?? a)}`}</button>`).join('');
+  if (app === 'config') renderConfig();
   if (app === 'navegador') colocarNavegador($('#slotNavPc'));
   if (app === 'terminal') abrirTerminal();
 }
 $('#tarefasPc').addEventListener('click', (e) => { const b = e.target.closest('[data-ir]'); if (b) mostrarApp(b.dataset.ir === 'area' ? null : b.dataset.ir); });
 for (const b of document.querySelectorAll('[data-minimizar]')) b.addEventListener('click', () => mostrarApp(null));
-$('#icones').addEventListener('click', async (e) => {
+$('#icones').addEventListener('click', (e) => {
+  const at = e.target.closest('[data-atalho]');
+  if (at) { mostrarApp('navegador'); return navegar(at.dataset.atalho); }
   const b = e.target.closest('[data-app]');
-  if (!b) return;
-  const app = b.dataset.app;
+  if (b) abrirApp(b.dataset.app);
+});
+async function abrirApp(app) {
   if (app === 'projeto') { mostrarApp('navegador'); return navegar(`/previa/${alvoPc}/`); }
   if (app === 'entregar') {
     try { const r = await api('POST', '/entregar-meu-trabalho'); $('#pcErro').textContent = r.ok ? `✅ ${r.mensagem}` : r.mensagem; } catch (err) { $('#pcErro').textContent = err.message; }
     return;
   }
+  if (app === 'pessoal') return abrirExplorador({ alvo: `pessoal-${alvoPc}`, caminho: '' });
+  if (app === 'drive') { compNovos = 0; atualizarBandeja(); return abrirExplorador({ alvo: 'drive', caminho: '' }); }
+  if (app === 'arquivos') return abrirExplorador();
   mostrarApp(app);
-  if (app === 'arquivos') listarArquivos(arqCaminho);
   if (app === 'historico') carregarHistoricoPc();
   if (app === 'navegador' && navHist.pos < 0) navegar(`/previa/${alvoPc}/`);
+}
+
+// Menu Iniciar e bandeja
+$('#btnIniciar').addEventListener('click', () => {
+  const m = $('#menuIniciar');
+  if (!m.hidden) return (m.hidden = true);
+  m.innerHTML = ICONES_PADRAO.filter((id) => !(id === 'entregar' && alvoPc !== 'voce')).map((id) => `<button data-iniciar="${id}">${APPS[id].ico} ${esc(APPS[id].nome)}</button>`).join('')
+    + (configPc.atalhos ?? []).map((a) => `<button data-iniciar-url="${esc(a.url)}">🔗 ${esc(a.nome)}</button>`).join('')
+    + '<hr><button data-iniciar="levantar">🚶 Levantar da mesa</button>';
+  m.hidden = false;
+});
+$('#menuIniciar').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  $('#menuIniciar').hidden = true;
+  if (b.dataset.iniciarUrl) { mostrarApp('navegador'); return navegar(b.dataset.iniciarUrl); }
+  if (b.dataset.iniciar === 'levantar') return fecharComputador();
+  abrirApp(b.dataset.iniciar);
+});
+$('#areaPc').addEventListener('click', (e) => { if (!e.target.closest('#menuIniciar')) $('#menuIniciar').hidden = true; });
+$('#bandejaComp').addEventListener('click', () => { compNovos = 0; atualizarBandeja(); abrirExplorador({ alvo: 'drive', caminho: 'Para você' }); });
+function atualizarBandeja() {
+  $('#compNovos').hidden = !compNovos;
+  $('#compNovos').textContent = compNovos;
+  if (!$('#computador').hidden) renderIcones();
+}
+
+let docAtual = null;
+const ICONE_TIPO = (n, pasta) => iconeDe(n, pasta);
+// markdown simples → documento bonito (títulos, negrito, listas, links, código)
+function mdParaHtml(t) {
+  const linha = (x) => esc(x).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|\W)\*([^*\s][^*]*)\*/g, '$1<i>$2</i>').replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a data-href="$2">$1</a>');
+  const out = []; let lista = null; let codigo = null;
+  for (const l of t.split('\n')) {
+    if (l.startsWith('```')) { if (codigo) { out.push(`<pre>${esc(codigo.join('\n'))}</pre>`); codigo = null; } else codigo = []; continue; }
+    if (codigo) { codigo.push(l); continue; }
+    const m = l.match(/^\s*([-*]|\d+\.)\s+(.*)/);
+    if (m) { const tipo = /\d/.test(m[1]) ? 'ol' : 'ul'; if (lista !== tipo) { if (lista) out.push(`</${lista}>`); out.push(`<${tipo}>`); lista = tipo; } out.push(`<li>${linha(m[2])}</li>`); continue; }
+    if (lista) { out.push(`</${lista}>`); lista = null; }
+    const h = l.match(/^(#{1,3})\s+(.*)/);
+    if (h) out.push(`<h${h[1].length}>${linha(h[2])}</h${h[1].length}>`);
+    else if (/^---+\s*$/.test(l)) out.push('<hr>');
+    else if (l.trim()) out.push(`<p>${linha(l)}</p>`);
+  }
+  if (lista) out.push(`</${lista}>`);
+  if (codigo) out.push(`<pre>${esc(codigo.join('\n'))}</pre>`);
+  return out.join('');
+}
+let docAlvo = 'drive';
+async function abrirDoc(caminho, alvo = 'drive') {
+  docAlvo = alvo;
+  const nome = caminho.split('/').pop();
+  const url = `/previa/${alvo}/${caminho.split('/').map(encodeURIComponent).join('/')}`;
+  if (/\.html?$/i.test(nome)) { mostrarApp('navegador'); return navegar(url); }
+  docAtual = caminho;
+  mostrarApp('doc');
+  $('#docTitulo').textContent = `${ICONE_TIPO(nome)} ${nome.replace(/\.(md|txt)$/i, '')}`;
+  $('#docEditar').hidden = !/\.(md|txt|csv|json|html?)$/i.test(nome);
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(nome)) return ($('#docCorpo').innerHTML = `<div class="doc"><img src="${url}" alt=""></div>`);
+  if (/\.pdf$/i.test(nome)) return ($('#docCorpo').innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:0"></iframe>`);
+  try {
+    const r = await api('GET', `/arquivo?alvo=${alvo}&caminho=${encodeURIComponent(caminho)}`);
+    if (r.binario || r.grande) return ($('#docCorpo').innerHTML = `<div class="doc"><p>Este arquivo não é um texto. <a data-href="${url}">Abrir no navegador</a></p></div>`);
+    $('#docCorpo').innerHTML = `<div class="doc">${/\.md$/i.test(nome) ? mdParaHtml(r.texto) : `<pre style="white-space:pre-wrap">${esc(r.texto)}</pre>`}</div>`;
+  } catch (e) { $('#docCorpo').textContent = e.message; }
+}
+$('#docCorpo').addEventListener('click', (e) => { const a = e.target.closest('[data-href]'); if (a) { mostrarApp('navegador'); navegar(a.dataset.href); } });
+$('#docEditar').addEventListener('click', () => docAtual && abrirNoEditor(docAtual, docAlvo));
+$('#docVoltar').addEventListener('click', () => { mostrarApp('arquivos'); explorador.recarregar(); });
+// Configurações: papel de parede, ícones da tela inicial e atalhos
+function renderConfig() {
+  const ordem = configPc.icones?.length ? configPc.icones : ICONES_PADRAO;
+  const ocultos = Object.keys(APPS).filter((id) => !ordem.includes(id));
+  const atalhos = configPc.atalhos ?? [];
+  $('#cfgCorpo').innerHTML = `
+    <h3>Papel de parede</h3>
+    <div class="papeis">${Object.entries(PAPEIS).map(([id, p]) => `<button data-papel="${id}" class="${(configPc.papel ?? 'crepusculo') === id ? 'ativo' : ''}" style="background:${p.css}"><span>${esc(p.nome)}</span></button>`).join('')}</div>
+    <h3>Tela inicial (arraste os ícones na área de trabalho, ou use as setas)</h3>
+    ${ordem.map((id, i) => {
+      const nome = id.startsWith('atalho:') ? `🔗 ${atalhos[Number(id.slice(7))]?.nome ?? '?'}` : `${APPS[id]?.ico} ${APPS[id]?.nome}`;
+      return `<div class="linha-cfg"><span>${esc(nome)}</span><button data-mover="${i}" data-dir="-1" ${i ? '' : 'disabled'}>↑</button><button data-mover="${i}" data-dir="1" ${i < ordem.length - 1 ? '' : 'disabled'}>↓</button><button data-tirar="${esc(id)}">tirar da tela</button></div>`;
+    }).join('')}
+    ${ocultos.length ? `<h3>Fora da tela inicial</h3>${ocultos.map((id) => `<div class="linha-cfg"><span>${APPS[id].ico} ${esc(APPS[id].nome)}</span><button data-por="${id}">pôr na tela</button></div>`).join('')}` : ''}
+    <h3>Novo atalho para um site</h3>
+    <div class="linha-cfg"><input id="cfgAtNome" placeholder="nome (ex.: Notícias)" style="width:160px"><input id="cfgAtUrl" placeholder="endereço (ex.: g1.globo.com)" style="flex:1"><button id="cfgAtAdd">adicionar</button></div>
+    <h3>Restaurar</h3>
+    <div class="linha-cfg"><span>Voltar a tela inicial ao padrão</span><button id="cfgPadrao">restaurar</button></div>`;
+}
+$('#cfgCorpo').addEventListener('click', (e) => {
+  const ordem = [...(configPc.icones?.length ? configPc.icones : ICONES_PADRAO)];
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.papel) return salvarConfigPc({ papel: b.dataset.papel });
+  if (b.dataset.mover) { const i = Number(b.dataset.mover); const j = i + Number(b.dataset.dir); [ordem[i], ordem[j]] = [ordem[j], ordem[i]]; return salvarConfigPc({ icones: ordem }); }
+  if (b.dataset.tirar) return salvarConfigPc({ icones: ordem.filter((x) => x !== b.dataset.tirar) });
+  if (b.dataset.por) return salvarConfigPc({ icones: [...ordem, b.dataset.por] });
+  if (b.id === 'cfgPadrao') return salvarConfigPc({ icones: ICONES_PADRAO, papel: 'crepusculo' });
+  if (b.id === 'cfgAtAdd') {
+    const nome = $('#cfgAtNome').value.trim(); const url = normalizarEndereco($('#cfgAtUrl').value);
+    if (!nome || !url) return avisar('Dê um nome e um endereço ao atalho.', 'Falta algo');
+    const atalhos = [...(configPc.atalhos ?? []), { nome, url }];
+    return salvarConfigPc({ atalhos, icones: [...ordem, `atalho:${atalhos.length - 1}`] });
+  }
 });
 
 // Navegador do jogo: um só, que vai para onde for preciso (computador, janela
@@ -1545,65 +1803,31 @@ window.__navegadorNativo = (dados) => {
   if (dados.url) { $('#navEndereco').value = dados.url; navUrlAtual = dados.url; }
 };
 
-// Arquivos
-async function listarArquivos(caminho) {
-  try {
-    const r = await api('GET', `/arquivos?alvo=${alvoPc}&caminho=${encodeURIComponent(caminho)}`);
-    arqCaminho = r.caminho;
-    $('#arqCaminho').textContent = `/${r.caminho}`;
-    $('#arqLista').innerHTML = r.itens.map((i) => `<tr data-nome="${esc(i.nome)}" data-pasta="${i.pasta ? 1 : 0}"><td>${i.pasta ? '📁' : '📄'} ${esc(i.nome)}</td><td style="color:#7a8296;width:120px">${i.pasta ? '' : `${(i.tamanho / 1024).toFixed(1)} KB`}</td><td style="color:#7a8296;width:160px">${new Date(i.modificado).toLocaleString('pt-BR')}</td><td class="acoes"><button data-renomear title="Renomear">✏️</button><button data-apagar title="Apagar">🗑️</button></td></tr>`).join('')
-      || '<tr><td style="color:#7a8296">Pasta vazia. Crie um arquivo ou uma pasta nos botões acima.</td></tr>';
-  } catch (e) { $('#pcErro').textContent = e.message; }
+// Explorador de arquivos (web/explorador.js): projeto, pasta pessoal, Drive e lixeira.
+function abrirArquivo({ alvo, caminho, nome, editar }) {
+  const url = `/previa/${encodeURIComponent(alvo)}/${caminho.split('/').map(encodeURIComponent).join('/')}`;
+  if (editar) return abrirNoEditor(caminho, alvo);
+  if (/\.html?$/i.test(nome)) { mostrarApp('navegador'); return navegar(url); }
+  if (/\.(png|jpe?g|gif|webp|svg|pdf|md|txt|csv)$/i.test(nome)) return abrirDoc(caminho, alvo);
+  abrirNoEditor(caminho, alvo);
 }
-$('#arqLista').addEventListener('click', async (e) => {
-  const tr = e.target.closest('tr[data-nome]');
-  if (!tr) return;
-  const alvo = arqCaminho ? `${arqCaminho}/${tr.dataset.nome}` : tr.dataset.nome;
-  if (e.target.closest('[data-renomear]')) {
-    const novo = await perguntar({ titulo: '✏️ Renomear', texto: `Novo nome para "${tr.dataset.nome}":`, campo: 'nome', valor: tr.dataset.nome, sim: 'Renomear' });
-    if (!novo || novo === tr.dataset.nome) return;
-    try { await api('POST', '/arquivo/renomear', { alvo: alvoPc, de: alvo, para: arqCaminho ? `${arqCaminho}/${novo}` : novo }); listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
-    return;
-  }
-  if (e.target.closest('[data-apagar]')) {
-    const pasta = tr.dataset.pasta === '1';
-    if (!(await confirmar(`${pasta ? 'A pasta e tudo o que tem dentro vão' : 'O arquivo vai'} para a lixeira do escritório. Dá para desfazer.`, { titulo: `🗑️ Apagar "${tr.dataset.nome}"?`, sim: 'Apagar', perigo: true }))) return;
-    try {
-      const r = await api('POST', '/arquivo/apagar', { alvo: alvoPc, caminho: alvo });
-      listarArquivos(arqCaminho);
-      if (edArquivo === alvo) { edArquivo = null; edSujo = false; $('#editorTexto').value = ''; $('#edTitulo').textContent = '📝 Editor'; }
-      $('#pcErro').innerHTML = `<span style="color:#cfd6e4">🗑️ "${esc(tr.dataset.nome)}" foi para a lixeira.</span> <button class="neutro pequeno" data-restaurar="${r.id}">desfazer</button>`;
-    } catch (err) { avisar(err.message); }
-    return;
-  }
-  if (tr.dataset.pasta === '1') listarArquivos(alvo);
-  else abrirNoEditor(alvo);
-});
-$('#arqSubir').addEventListener('click', () => listarArquivos(arqCaminho.split('/').slice(0, -1).join('/')));
-$('#arqNovo').addEventListener('click', async () => {
-  const nome = await perguntar({ titulo: '📄 Novo arquivo', texto: 'Nome do arquivo (ex.: notas.md, index.html):', campo: 'nome do arquivo', sim: 'Criar' });
-  if (!nome) return;
-  const caminho = arqCaminho ? `${arqCaminho}/${nome}` : nome;
-  try { await api('POST', '/arquivo/novo', { alvo: alvoPc, caminho }); listarArquivos(arqCaminho); abrirNoEditor(caminho); } catch (err) { avisar(err.message); }
-});
-$('#arqNovaPasta').addEventListener('click', async () => {
-  const nome = await perguntar({ titulo: '📁 Nova pasta', texto: 'Nome da pasta:', campo: 'nome da pasta', sim: 'Criar' });
-  if (!nome) return;
-  try { await api('POST', '/pasta', { alvo: alvoPc, caminho: arqCaminho ? `${arqCaminho}/${nome}` : nome }); listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
-});
-$('#pcErro').addEventListener('click', async (e) => {
-  const b = e.target.closest('[data-restaurar]');
-  if (!b) return;
-  try { await api('POST', '/arquivo/restaurar', { id: b.dataset.restaurar }); $('#pcErro').innerHTML = '<span style="color:#cfd6e4">↩️ Restaurado.</span>'; listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
-});
+const explorador = criarExplorador($('#expRaiz'), { api, esc, perguntar, confirmar, avisar, nomeDe, abrirArquivo });
+let explorandoPc = null;
+function abrirExplorador(destino) {
+  mostrarApp('arquivos');
+  if (destino || explorandoPc !== alvoPc) { explorandoPc = alvoPc; explorador.abrir(alvoPc, destino ?? { alvo: alvoPc, caminho: '' }); }
+  setTimeout(() => $('#expRaiz .exp-main')?.focus(), 50);
+}
 
 // Editor
-async function abrirNoEditor(caminho) {
+let edAlvo = null;
+async function abrirNoEditor(caminho, alvo = alvoPc) {
   if (edSujo && !(await confirmar('Há alterações não salvas no editor.', { titulo: 'Descartar alterações?', sim: 'Descartar' }))) return;
   try {
-    const r = await api('GET', `/arquivo?alvo=${alvoPc}&caminho=${encodeURIComponent(caminho)}`);
+    const r = await api('GET', `/arquivo?alvo=${alvo}&caminho=${encodeURIComponent(caminho)}`);
     mostrarApp('editor');
     edArquivo = r.caminho;
+    edAlvo = alvo;
     $('#edTitulo').textContent = `📝 ${r.caminho}`;
     if (r.binario || r.grande) {
       $('#editorTexto').value = r.binario ? '(arquivo binário: abra pelo navegador)' : '(arquivo grande demais para o editor)';
@@ -1619,7 +1843,7 @@ async function abrirNoEditor(caminho) {
 async function salvarEditor() {
   if (!edArquivo || $('#editorTexto').readOnly) return;
   try {
-    await api('PUT', '/arquivo', { alvo: alvoPc, caminho: edArquivo, conteudo: $('#editorTexto').value });
+    await api('PUT', '/arquivo', { alvo: edAlvo ?? alvoPc, caminho: edArquivo, conteudo: $('#editorTexto').value });
     edSujo = false;
     $('#edStatus').textContent = `salvo às ${new Date().toLocaleTimeString('pt-BR')}`;
   } catch (e) { $('#edStatus').textContent = e.message; }
@@ -1637,7 +1861,7 @@ $('#editorTexto').addEventListener('keydown', (e) => {
   }
 });
 $('#edSalvar').addEventListener('click', salvarEditor);
-$('#edVer').addEventListener('click', async () => { if (!edArquivo) return; if (edSujo) await salvarEditor(); mostrarApp('navegador'); navegar(`/previa/${alvoPc}/${edArquivo}`); });
+$('#edVer').addEventListener('click', async () => { if (!edArquivo) return; if (edSujo) await salvarEditor(); mostrarApp('navegador'); navegar(`/previa/${edAlvo ?? alvoPc}/${edArquivo.split('/').map(encodeURIComponent).join('/')}`); });
 
 // Histórico (no computador)
 async function carregarHistoricoPc() {
@@ -1785,6 +2009,7 @@ function atualizarVivos() {
   const d = new Date();
   $('#relogio').textContent = `🕒 ${d.toLocaleDateString('pt-BR', { weekday: 'short' })} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
   $('#pcRelogio').textContent = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  $('#pcRelogioBarra').textContent = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const n = [...personagens.values()].filter((p) => p.ocupado && !p.ehVoce).length;
   $('#trabalhando').textContent = n ? `⌨️ ${n} trabalhando` : '';
   if (maquina) {
@@ -1817,6 +2042,7 @@ function htmlFicha(p) {
       <button class="neutro pequeno" data-fechar>fechar</button></div>
     <dl>
       ${p.personalidade ? `<dt>Jeito</dt><dd>${esc(p.personalidade)}</dd>` : ''}
+      ${p.pensamento ? `<dt>Pensando</dt><dd>💭 ${esc(p.pensamento.texto)} <span class="vazio">(${Math.max(1, Math.round((Date.now() - p.pensamento.em) / 60000))} min atrás)</span></dd>` : ''}
       ${f ? `<dt>Vida</dt><dd>${f.idade} anos, de ${esc(f.cidade)}. ${esc(f.familia.charAt(0).toUpperCase() + f.familia.slice(1))}. Tem ${esc(f.pet)}. Gosta de ${esc(f.hobbies.join(' e '))}. ${f.time === 'não liga para futebol' ? 'Não liga para futebol' : `Torce para o ${esc(f.time)}`}. Ouve ${esc(f.musica)}. Mania: ${esc(f.mania)}.</dd>` : ''}
       ${agenda?.vida?.[p.id] ? `<dt>Ontem</dt><dd>${esc(agenda.vida[p.id])}</dd>` : ''}
       ${p.aniversario ? `<dt>Aniversário</dt><dd>${p.aniversario.split('-').reverse().join('/')}${aniversariantes.has(p.id) ? ' 🎂 é hoje!' : ''}</dd>` : ''}
@@ -1842,13 +2068,23 @@ function atualizarPainel() {
   if (projeto) $('#projetoNome').textContent = `${areas.find((a) => a.id === escritorio?.area)?.nome ?? ''} · projeto: ${projeto.nome}`;
 
   // pedidos: cartões no canto da tela
-  const ps = [...pedidos.values()];
   const cs = [...contratacoes.values()];
-  $('#pedidos').innerHTML =
+  const as = [...acessos.values()];
+  const htmlPedidos =
+    as.map((e) => `<div class="pedido px"><div class="titulo">🔑 ${e.chefe && e.chefe !== e.funcionario ? `${esc(nomeDe(e.chefe))} traz um pedido de ${esc(nomeDe(e.funcionario))}` : `${esc(nomeDe(e.funcionario))} pede`}</div><p><b>${esc(e.oque)}</b><br>${esc(e.porque)}</p>
+        <textarea data-resposta="${e.idPedido}" placeholder="Sua resposta (ex.: o login, ou como fazer)"></textarea>
+        <div class="linha"><button data-tipo="acesso" data-id="${e.idPedido}" data-aprovar="1">Responder</button><button class="neutro" data-tipo="acesso" data-id="${e.idPedido}" data-aprovar="0">Não liberar</button></div></div>`).join('') +
     cs.map((e) => `<div class="pedido px"><div class="titulo">📋 ${esc(nomeDe(e.pedidoPor))} quer contratar: ${esc(cargosInfo[e.cargo]?.titulo ?? e.cargo)}</div><p>${esc(e.motivo)}</p>
         <div class="linha"><button data-tipo="contratacao" data-id="${e.idPedido}" data-aprovar="1">Contratar</button><button class="neutro" data-tipo="contratacao" data-id="${e.idPedido}" data-aprovar="0">Agora não</button></div></div>`).join('') +
-    ps.map((e) => `<div class="pedido px"><div class="titulo">✋ ${esc(nomeDe(sessaoParaId.get(e.sessao)))} quer usar ${esc(e.ferramenta)}</div><code>${esc(e.resumo)}</code>
-        <div class="linha"><button data-id="${e.idPedido}" data-aprovar="1">Aprovar</button><button class="neutro" data-id="${e.idPedido}" data-aprovar="0">Negar</button></div></div>`).join('');
+    '';
+  const chavePedidos = [...as.map((e) => e.idPedido), ...cs.map((e) => e.idPedido)].join(',');
+  if (chavePedidos !== ultimaChavePedidos) {
+    // guarda o que já foi digitado nas respostas
+    const digitado = Object.fromEntries([...document.querySelectorAll('#pedidos textarea[data-resposta]')].map((t) => [t.dataset.resposta, t.value]));
+    $('#pedidos').innerHTML = htmlPedidos;
+    for (const [id, v] of Object.entries(digitado)) { const t = $(`#pedidos textarea[data-resposta="${id}"]`); if (t) t.value = v; }
+    ultimaChavePedidos = chavePedidos;
+  }
 
   // equipe: fileira de rostos e janela
   const membros = [...personagens.values()].filter((p) => !p.ehVoce && p.cargo);
@@ -2053,7 +2289,6 @@ function aplicarEstado(estado) {
   internet = estado.internet ?? true;
   aprovarTudo = Boolean(estado.aprovarTudo);
   vozConfigurada = false; // vozes deixadas de lado por enquanto
-  $('#fAuto').checked = aprovarTudo;
   agenda = estado.agenda ?? agenda;
   almocoAte = estado.almocoAte ?? null;
   diario = estado.diario ?? diario;
@@ -2063,6 +2298,8 @@ function aplicarEstado(estado) {
     for (const m of lista) if (!conversas[id].some((x) => x.em === m.em && x.de === m.de)) conversas[id].push(m);
     conversas[id].sort((a, b) => a.em.localeCompare(b.em));
   }
+  for (const a of estado.acessos ?? []) if (!acessos.has(a.idPedido)) acessos.set(a.idPedido, { tipo: 'acesso_pedido', ...a });
+  configsPc = estado.computadores ?? {};
   for (const c of estado.contratacoes ?? []) if (!contratacoes.has(c.id)) contratacoes.set(c.id, { tipo: 'contratacao_pedida', idPedido: c.id, cargo: c.cargo, motivo: c.motivo, pedidoPor: c.pedidoPor });
   const md = `${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
   for (const f of equipeInfo) if (f.aniversario === md && !f.ferias) aniversariantes.add(f.id);

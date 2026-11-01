@@ -43,11 +43,11 @@ export function comportamento(ev) {
       if (ev.ferramenta.startsWith('mcp__escritorio__')) return { acao: 'pensando' };
       return { acao: 'digitando' };
     case 'ferramenta_resultado':
-      return ev.erro ? { fala: 'Hmm, deu erro…' } : {};
+      return {}; // erro de comando faz parte do trabalho; não vira balão
     case 'permissao_pedida':
-      return { acao: 'pedindo', fala: `Posso? ${ev.ferramenta}: ${curto(ev.resumo, 50)}`, fixo: true };
+      return { acao: 'pedindo', fixo: true };
     case 'permissao_respondida':
-      return { acao: 'pensando', fala: ev.aprovada ? 'Valeu!' : 'Ok, não vou fazer.', liberar: true };
+      return { acao: 'pensando', liberar: true };
     case 'compactacao':
       return { acao: 'banheiro', fala: 'Já volto!' };
     case 'cota':

@@ -130,7 +130,10 @@ export class Orquestrador extends EventEmitter {
   // ---------- expediente ----------
   // Abre quando o app abre: o chefe chega, a equipe chega, daily, e quem parou
   // no meio de uma tarefa ontem continua de onde parou.
+  abertoEm: Date | null = null;
   abrirExpediente() {
+    this.abertoEm = new Date();
+    this.iniciarVida();
     this.iniciarMaquina();
     if (!this.estado.boasVindas) return;
     const luzCaiu = this.estado.aberto;
@@ -411,6 +414,13 @@ export class Orquestrador extends EventEmitter {
       local !== f.id ? `Atenção: esta é a mesa de ${this.nomeDe(local)}; você veio ajudar. Mexa só no necessário.` : '',
       oficio ? `\nGuia do ofício (${CARGOS[f.cargo].titulo}):\n${oficio}` : '',
       this.estado.internet ? '' : '\nA internet do escritório está desligada: não pesquise nem acesse sites.',
+      '\nAutonomia: você não precisa de permissão para trabalhar. Criar, editar e apagar arquivos, rodar comandos no terminal, instalar dependências e pesquisar dentro da pasta do projeto são liberados: faça.',
+      'Mudança grande ou arriscada (repaginar tudo, mudar a arquitetura, reiniciar ou derrubar servidor, apagar muita coisa, publicar/deploy): antes, peça aval ao chefe com pedir_aval_do_chefe. Ele decide.',
+      'Só o que é do gestor (o dono) passa por ele, via pedir_acesso (o chefe leva o pedido): login ou senha de uma conta, pagamento. Nunca invente credenciais.',
+      'Precisa de alguém da equipe (uma dúvida, combinar algo, pedir ajuda)? Use falar_com_colega: é conversa de verdade, a resposta volta para você.',
+      'Se algo deve chegar na mão do gestor (documento, imagem, planilha, prévia), use compartilhar_com_gestor: vai para o Drive da empresa com um nome claro para um leigo. Isso não muda o projeto, que continua bem feito e organizado do jeito técnico certo.',
+      'Sua última mensagem vira o seu relatório para o gestor: em português claro, diga o que fez, onde está, como conferir (com a evidência real) e o que falta.',
+      `Hoje é ${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
     ].filter(Boolean).join('\n');
     const prompt = opts.continuar
       ? `O expediente anterior terminou no meio desta tarefa. O que estava pela metade foi salvo num commit na sua branch. Continue de onde parou e conclua.\n\nTarefa original:\n${tarefa}`
@@ -424,6 +434,8 @@ export class Orquestrador extends EventEmitter {
         modelo: f.modelo,
         instrucoes,
         retomar: opts.retomar,
+        mcpServers: { escritorio: this.ferramentasDaTarefa(f, mesa.pasta) },
+        ferramentasLiberadas: ['mcp__escritorio__falar_com_colega', 'mcp__escritorio__pedir_aval_do_chefe', 'mcp__escritorio__pedir_acesso', 'mcp__escritorio__esperar_resposta', 'mcp__escritorio__compartilhar_com_gestor'],
         ...(this.estado.internet ? {} : { ferramentasProibidas: ['WebFetch', 'WebSearch'] }),
       },
       { funcionario: f.id, projeto: esc.projeto, delegadoPor, tarefa, mesaDe: local },
@@ -454,6 +466,11 @@ export class Orquestrador extends EventEmitter {
       const integ = esc.integrar(mesa, f.nome);
       this.doEscritorio({ tipo: 'integracao', funcionario: f.id, ...integ });
       this.diario(f.id, `${sucesso ? 'Entregou' : 'Não terminou'}: ${encurtar(tarefa, 160)}${integ.commits ? ` (${integ.mensagem})` : ''}`);
+      try {
+        this.relatorioDaTarefa(f, tarefa, sucesso, ev.tipo === 'tarefa_terminada' ? ev.resultado ?? '' : `Erro: ${ev.mensagem}`, integ.mensagem);
+      } catch {}
+      // pedidos de acesso sem resposta morrem com a tarefa
+      for (const a of [...this.acessos.values()]) if (a.funcionario === f.id) { this.acessos.delete(a.idPedido); this.doEscritorio({ tipo: 'acesso_respondido', idPedido: a.idPedido, funcionario: a.funcionario, ...(a.chefe ? { chefe: a.chefe } : {}), aprovado: false }); }
       this.ajustarHumor(f.id, sucesso ? 4 : -6, sucesso ? 'entregou uma tarefa' : 'a tarefa não deu certo');
       // Muita tarefa seguida sem respiro cansa (excesso de trabalho).
       const s = this.seguidas.get(f.id) ?? { n: 0, ultima: 0 };
@@ -491,13 +508,10 @@ export class Orquestrador extends EventEmitter {
   }
 
   private novaSessao(opcoes: Omit<ConstructorParameters<typeof Sessao>[0], 'decidirPermissao'>, reg: Omit<Registro, 'sessao' | 'estado'>): Sessao {
-    const sessao: Sessao = new Sessao({
-      ...opcoes,
-      decidirPermissao: (pedido) =>
-        reg.autoAprovar || this.estado.aprovarTudo
-          ? Promise.resolve({ aprovada: true, motivo: 'aprovação automática ligada' })
-          : new Promise((responder) => this.pendentes.set(pedido.idPedido, { sessao: sessao.id, pedido, responder })),
-    });
+    // Autonomia: tudo dentro da pasta do projeto é liberado sem perguntar
+    // (a Sessao nega o que sai dela). O que só o gestor pode dar (login de uma
+    // conta, pagamento, publicar em nome dele) vem por pedir_acesso, pelo chefe.
+    const sessao: Sessao = new Sessao({ ...opcoes });
     registrar(sessao, this.pastaLogs);
     sessao.on('evento', (ev: Evento) => {
       if (ev.tipo === 'cota') this.verCota(ev);
@@ -511,6 +525,207 @@ export class Orquestrador extends EventEmitter {
       for (const [id, p] of this.pendentes) if (p.sessao === sessao.id) this.pendentes.delete(id);
     });
     return sessao;
+  }
+
+  // ---------- pedidos de acesso: só o que é do gestor (contas, senhas, pagamento) ----------
+  readonly acessos = new Map<string, { idPedido: string; funcionario: string; chefe?: string; oque: string; porque: string; em: string }>();
+  private respostasAcesso = new Map<string, string>();
+  private esperandoAcesso = new Map<string, ((r: string) => void)[]>();
+  private esperarAcesso(id: string, ms = 10 * 60_000): Promise<string> {
+    const pronta = this.respostasAcesso.get(id);
+    if (pronta) return Promise.resolve(pronta);
+    if (!this.acessos.has(id)) return Promise.resolve('Esse pedido não existe mais.');
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this.esperandoAcesso.set(id, (this.esperandoAcesso.get(id) ?? []).filter((x) => x !== fim));
+        resolve(`O gestor ainda não respondeu (pedido ${id}); o pedido continua com ele. Siga com o que dá para fazer sem isso. Se precisar mesmo, chame esperar_resposta com o id ${id} mais tarde, ou termine dizendo no relatório o que ficou faltando.`);
+      }, ms);
+      const fim = (r: string) => { clearTimeout(t); resolve(r); };
+      this.esperandoAcesso.set(id, [...(this.esperandoAcesso.get(id) ?? []), fim]);
+    });
+  }
+  private pedirAcesso(f: Funcionario, oque: string, porque: string): Promise<string> {
+    // o mesmo pedido de novo: continua esperando o que já está com o gestor
+    const aberto = [...this.acessos.values()].find((a) => a.funcionario === f.id);
+    if (aberto) return this.esperarAcesso(aberto.idPedido);
+    const idPedido = randomUUID().slice(0, 8);
+    const chefe = this.chefe;
+    this.acessos.set(idPedido, { idPedido, funcionario: f.id, chefe: chefe?.id, oque, porque, em: new Date().toISOString() });
+    this.doEscritorio({ tipo: 'acesso_pedido', idPedido, funcionario: f.id, ...(chefe ? { chefe: chefe.id } : {}), oque, porque });
+    this.diario(f.id, `Pediu ao gestor (pelo chefe): ${encurtar(oque, 120)}`);
+    if (chefe) this.recados.push(`[Aviso do escritório] ${f.nome} precisou de algo que só o gestor pode dar: "${encurtar(oque, 160)}" (${encurtar(porque, 160)}). Você levou o pedido ao gestor.`);
+    return this.esperarAcesso(idPedido);
+  }
+  responderAcesso(id: string, resposta: string, negar = false) {
+    const a = this.acessos.get(id);
+    if (!a) throw new Error('pedido não encontrado ou já respondido');
+    this.acessos.delete(id);
+    // no diário vai só o fato, nunca o conteúdo (pode ser uma senha)
+    this.diario(a.funcionario, negar ? `O gestor não liberou: ${encurtar(a.oque, 100)}` : `O gestor respondeu ao pedido: ${encurtar(a.oque, 100)}`);
+    const texto = negar ? `O gestor não liberou${resposta ? `: ${resposta}` : '.'} Siga sem isso, ou explique no relatório o que ficou faltando.` : `O gestor respondeu: ${resposta}`;
+    this.respostasAcesso.set(id, texto);
+    for (const fim of this.esperandoAcesso.get(id) ?? []) fim(texto);
+    this.esperandoAcesso.delete(id);
+    this.doEscritorio({ tipo: 'acesso_respondido', idPedido: id, funcionario: a.funcionario, ...(a.chefe ? { chefe: a.chefe } : {}), aprovado: !negar });
+  }
+
+  personalizarComputador(alvo: string, c: { papel?: unknown; icones?: unknown; atalhos?: unknown }) {
+    if (alvo !== 'voce' && alvo !== 'principal' && !this.funcionario(alvo)) throw new Error('computador desconhecido');
+    const todos = (this.estado.computadores ??= {});
+    if (this.estado.computador) { todos.voce ??= this.estado.computador; delete this.estado.computador; }
+    const atual = (todos[alvo] ??= {});
+    if (typeof c.papel === 'string') atual.papel = c.papel.slice(0, 40);
+    if (Array.isArray(c.icones)) atual.icones = c.icones.filter((x): x is string => typeof x === 'string').slice(0, 40);
+    if (Array.isArray(c.atalhos)) {
+      atual.atalhos = c.atalhos
+        .filter((a): a is { nome: string; url: string } => typeof a?.nome === 'string' && typeof a?.url === 'string' && /^(https?:\/\/|\/)/.test(a.url))
+        .map((a) => ({ nome: a.nome.slice(0, 30), url: a.url.slice(0, 500) }))
+        .slice(0, 16);
+    }
+    this.salvar();
+    return atual;
+  }
+
+  // Drive da empresa: o lugar simples onde a equipe põe coisas para o gestor ver
+  // (pastas com nomes de gente, não a estrutura técnica do projeto). Um índice
+  // escondido guarda quem mandou, quando e o recado.
+  static readonly PASTAS_DRIVE = ['Para você', 'Relatórios', 'Documentos', 'Imagens'];
+  pastaDrive() {
+    const p = path.join(PASTA_DADOS, 'drive');
+    for (const sub of Orquestrador.PASTAS_DRIVE) fs.mkdirSync(path.join(p, sub), { recursive: true });
+    // o que veio da versão anterior (compartilhados) vai para "Para você"
+    const antiga = path.join(PASTA_DADOS, 'compartilhados');
+    if (fs.existsSync(antiga)) {
+      for (const n of fs.readdirSync(antiga)) if (!n.endsWith('.recado.txt')) try { fs.renameSync(path.join(antiga, n), path.join(p, n.includes('Relatório') ? 'Relatórios' : 'Para você', n)); } catch {}
+      fs.rmSync(antiga, { recursive: true, force: true });
+    }
+    return p;
+  }
+  private indiceDrive(): Record<string, { de?: string; recado?: string; em: string }> {
+    try { return JSON.parse(fs.readFileSync(path.join(this.pastaDrive(), '.indice.json'), 'utf8')); } catch { return {}; }
+  }
+  private anotarNoDrive(rel: string, info: { de?: string; recado?: string }) {
+    const idx = this.indiceDrive();
+    idx[rel] = { ...info, em: new Date().toISOString() };
+    fs.writeFileSync(path.join(this.pastaDrive(), '.indice.json'), JSON.stringify(idx, null, 1));
+  }
+  // nome que não sobrescreve nada: "Texto.md", "Texto (2).md"…
+  private nomeLivre(pasta: string, nome: string) {
+    const limpo = nome.replace(/[\/\\\0:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120) || 'arquivo';
+    const ext = path.extname(limpo);
+    const base = limpo.slice(0, limpo.length - ext.length);
+    let n = 1, final = limpo;
+    while (fs.existsSync(path.join(pasta, final))) final = `${base} (${++n})${ext}`;
+    return final;
+  }
+  private quandoCurto() {
+    return new Date().toLocaleString('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '').replace('.', '').replace(':', 'h');
+  }
+  compartilhar(f: Funcionario, origem: string, mensagem: string, nome?: string, pasta = 'Para você') {
+    const st = fs.statSync(origem);
+    const sub = Orquestrador.PASTAS_DRIVE.includes(pasta) ? pasta : 'Para você';
+    const dir = path.join(this.pastaDrive(), sub);
+    const final = this.nomeLivre(dir, nome?.trim() ? (path.extname(nome) || st.isDirectory() ? nome : nome + path.extname(origem)) : path.basename(origem));
+    fs.cpSync(origem, path.join(dir, final), { recursive: st.isDirectory() });
+    this.anotarNoDrive(`${sub}/${final}`, { de: f.nome, recado: mensagem.trim() });
+    this.doEscritorio({ tipo: 'compartilhado', funcionario: f.id, nome: `${sub}/${final}`, mensagem: encurtar(mensagem, 300) });
+    this.diario(f.id, `Pôs no Drive (${sub}): ${final}`);
+    return `${sub}/${final}`;
+  }
+  private relatorioDaTarefa(f: Funcionario, tarefa: string, sucesso: boolean, relato: string, integracao: string) {
+    const dir = path.join(this.pastaDrive(), 'Relatórios');
+    // título curto em palavras inteiras: "Caio - Escreva o post do Instagram (1 de nov 19h21).md"
+    const palavras = tarefa.replace(/[\n\r]+/g, ' ').replace(/[^\p{L}\p{N} ,.-]/gu, ' ').split(/\s+/).filter(Boolean);
+    let titulo = '';
+    for (const w of palavras) { if ((titulo + ' ' + w).length > 44) break; titulo = titulo ? `${titulo} ${w}` : w; }
+    const nome = this.nomeLivre(dir, `${f.nome} - ${titulo.replace(/[,.]+$/, '')} (${this.quandoCurto()}).md`);
+    const texto = [
+      `# Relatório de ${f.nome}`,
+      '',
+      `**${tituloDe(f)}** · ${new Date().toLocaleString('pt-BR')}`,
+      '',
+      `**Tarefa:** ${tarefa}`,
+      '',
+      `**Resultado:** ${sucesso ? 'concluída ✅' : 'não concluída ⚠️'} · **Versão principal:** ${integracao}`,
+      '',
+      '---',
+      '',
+      relato.trim() || '(sem relato)',
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, nome), texto);
+    this.anotarNoDrive(`Relatórios/${nome}`, { de: f.nome, recado: `Relatório: ${encurtar(tarefa, 120)}` });
+    this.doEscritorio({ tipo: 'compartilhado', funcionario: f.id, nome: `Relatórios/${nome}`, mensagem: `Relatório: ${encurtar(tarefa, 120)}`, relatorio: true });
+  }
+  listarDrive(relativo = '') {
+    const { abs, rel } = this.caminhoSeguro('drive', relativo);
+    const idx = this.indiceDrive();
+    const itens = fs.readdirSync(abs, { withFileTypes: true })
+      .filter((d) => !d.name.startsWith('.'))
+      .map((d) => {
+        const st = fs.statSync(path.join(abs, d.name));
+        const chave = rel ? `${rel}/${d.name}` : d.name;
+        const i = idx[chave];
+        return { nome: d.name, caminho: chave, pasta: d.isDirectory(), tamanho: st.size, em: (i?.em ?? st.mtime.toISOString()), de: i?.de ?? '', recado: i?.recado ?? '', itens: d.isDirectory() ? fs.readdirSync(path.join(abs, d.name)).filter((n) => !n.startsWith('.')).length : undefined };
+      })
+      .sort((a, b) => (a.pasta === b.pasta ? (a.pasta && !rel ? Orquestrador.PASTAS_DRIVE.indexOf(a.nome) - Orquestrador.PASTAS_DRIVE.indexOf(b.nome) : b.em.localeCompare(a.em)) : a.pasta ? -1 : 1));
+    return { caminho: rel, itens };
+  }
+
+  private ferramentasDaTarefa(f: Funcionario, pasta: string) {
+    const texto = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+    const erro = (t: string) => ({ ...texto(t), isError: true });
+    return createSdkMcpServer({
+      name: 'escritorio',
+      version: '1.0.0',
+      tools: [
+        tool(
+          'pedir_acesso',
+          'Pede ao gestor (pelo chefe) algo que só ele pode dar: login/senha de uma conta (rede social, e-mail, hospedagem, loja), pagamento, ou autorização para publicar em nome dele. ' +
+            'NÃO use para trabalhar: criar, editar e apagar arquivos, rodar comandos, instalar dependências e pesquisar na pasta do projeto já são liberados. Espera a resposta do gestor.',
+          { o_que: z.string().describe('o que você precisa, em uma frase'), por_que: z.string().describe('para que, em uma frase') },
+          async ({ o_que, por_que }) => texto(await this.pedirAcesso(f, o_que, por_que)),
+          SEMPRE,
+        ),
+        this.ferramentaDeConversa(f),
+        tool(
+          'pedir_aval_do_chefe',
+          'Pede ao chefe aval antes de uma mudança GRANDE ou ARRISCADA: repaginar/redesenhar o projeto inteiro, mudar a arquitetura, reiniciar ou derrubar um servidor, apagar muita coisa, publicar ou fazer deploy. ' +
+            'Escrever, editar, criar arquivos, rodar testes e comandos normais NÃO precisam de aval. Espera a decisão do chefe.',
+          { o_que: z.string().describe('a mudança, em uma frase'), por_que: z.string().describe('por que é preciso, em uma frase') },
+          async ({ o_que, por_que }) => texto(await this.avalDoChefe(f, o_que, por_que)),
+          SEMPRE,
+        ),
+        tool(
+          'esperar_resposta',
+          'Volta a esperar a resposta do gestor a um pedido_acesso que ainda não foi respondido (até 10 minutos).',
+          { id: z.string().describe('o id do pedido') },
+          async ({ id }) => texto(await this.esperarAcesso(id)),
+          SEMPRE,
+        ),
+        tool(
+          'compartilhar_com_gestor',
+          'Põe uma cópia de um arquivo ou pasta do projeto no Drive da empresa, para o gestor ver (ele é leigo: dê um nome claro, em português, como "Texto do Instagram.md" ou "Logo nova.png"). O projeto continua organizado do jeito técnico certo; o Drive é a cópia fácil de achar.',
+          {
+            arquivo: z.string().describe('caminho do arquivo ou pasta, relativo à pasta do projeto'),
+            recado: z.string().describe('uma ou duas frases para o gestor'),
+            nome: z.string().optional().describe('nome claro para o gestor (opcional)'),
+            pasta: z.enum(['Para você', 'Documentos', 'Imagens']).optional().describe('pasta do Drive (padrão: Para você)'),
+          },
+          async ({ arquivo, recado, nome, pasta: pastaNoDrive }) => {
+            const abs = path.resolve(pasta, arquivo);
+            const rel = path.relative(pasta, abs);
+            if (rel.startsWith('..') || path.isAbsolute(rel) || rel.split(path.sep)[0] === '.git') return erro('Só arquivos de dentro da pasta do projeto.');
+            if (!fs.existsSync(abs)) return erro(`Não encontrei ${arquivo}.`);
+            try {
+              return texto(`Pronto: "${this.compartilhar(f, abs, recado, nome, pastaNoDrive)}" já está no Drive da empresa, no computador do gestor.`);
+            } catch (e) {
+              return erro(`Não deu: ${(e as Error).message}`);
+            }
+          },
+          SEMPRE,
+        ),
+      ],
+    });
   }
 
   responderPermissao(id: string, aprovar: boolean, motivo?: string) {
@@ -612,6 +827,7 @@ export class Orquestrador extends EventEmitter {
       }
     }
     const ferramentas = f.cargo === 'chefe' ? this.ferramentasDaPersonaChefe(f) : this.ferramentasDoFuncionario(f);
+    ferramentas.nomes.push('fazer_no_escritorio', 'falar_com_colega');
     p = new Persona({
       id: f.id,
       sistema: this.sistemaDaPersona(f),
@@ -644,9 +860,13 @@ export class Orquestrador extends EventEmitter {
       `Sua vida: ${fi.familia}; tem ${fi.pet}; gosta de ${fi.hobbies.join(' e ')}; ${fi.time === 'não liga para futebol' ? 'não liga para futebol' : `torce para o ${fi.time}`}; ouve ${fi.musica}; comida preferida: ${fi.comida}; mania: ${fi.mania}.`,
       'Você é uma pessoa de verdade dentro deste mundo: tem vida fora do trabalho, família, fins de semana, gostos e opiniões. Nunca diga que é uma IA, um modelo, um assistente ou um personagem.',
       'Fale como gente: português do Brasil coloquial, curto (1 a 3 frases), no seu jeito. Sem markdown, sem listas, sem emojis em excesso.',
-      'Quem fala com você é o gestor (o dono do escritório). Antes da fala dele chegam [Fatos do escritório]: eles são a verdade sobre o trabalho. Use-os sem recitar.',
+      'Normalmente quem fala com você é o gestor (o dono do escritório). Quando a mensagem vier marcada [Colega], é um colega de trabalho falando com você: responda a ele. Antes chegam [Fatos do escritório]: eles são a verdade sobre o trabalho. Use-os sem recitar.',
+      'Vocês trabalham na mesma sala e se falam de verdade: para falar com um colega (porque o gestor pediu ou porque você precisa), use falar_com_colega e depois conte o que ele respondeu. Nunca invente a resposta de alguém.',
       'Sobre trabalho, só fale do que está nos fatos. Nunca invente progresso, arquivos, números ou resultados.',
+      'Noção de tempo: os fatos dizem a data e a hora de agora e quando cada coisa aconteceu ("hoje às…", "ontem…"). Use exatamente isso. Se não há registro, você não fez: não diga "ontem eu fiz" sem estar nos fatos.',
       'O humor muda seu tom e sua iniciativa, nunca a qualidade do trabalho.',
+      'Você existe no escritório: anda, pega café, vai ao bebedouro. Quando decidir fazer algo, ou quando o gestor pedir (ex.: "me traz um café"), use fazer_no_escritorio de verdade, não só diga que vai.',
+      'Às vezes chega um [Momento livre] em vez de uma fala do gestor: aí siga exatamente o formato pedido.',
     ];
     if (f.cargo === 'chefe') {
       base.push(
@@ -663,23 +883,45 @@ export class Orquestrador extends EventEmitter {
     return base.join('\n');
   }
 
+  // "hoje às 14:05", "ontem às 9:10", "há 3 dias (28/10)": o modelo não faz contas de data.
+  private quando(iso?: string, data?: string): string {
+    const d = iso ? new Date(iso) : data ? new Date(`${data}T12:00`) : null;
+    if (!d || Number.isNaN(d.getTime())) return data ?? '';
+    const dia = (x: Date) => Math.floor(new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() / 86_400_000);
+    const n = dia(new Date()) - dia(d);
+    const h = iso ? ` às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : '';
+    if (n <= 0) return `hoje${h}`;
+    if (n === 1) return `ontem${h}`;
+    return `há ${n} dias (${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })})`;
+  }
+
   private fatosPara(f: Funcionario): string {
     const e = this.estado;
-    const agora = new Date().toLocaleString('pt-BR', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+    const agora = new Date().toLocaleString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const humor = f.humor ?? 70;
     const linhas = [
-      `[Fatos do escritório — ${agora}]`,
+      `[Fatos do escritório — agora é ${agora}]`,
+      `O expediente de hoje abriu ${this.abertoEm ? this.quando(this.abertoEm.toISOString()) : 'agora há pouco'}. Você está no escritório desde então.`,
       `Fase: ${e.fase}. Escritório: ${e.escritorio?.nome ?? '-'}. Projeto principal: ${e.projeto?.nome ?? '-'}${e.projeto?.descricao ? ` (${e.projeto.descricao})` : ''}.`,
       `Seu humor: ${humor}/100 (${humor >= 65 ? 'animado' : humor >= 35 ? 'normal' : 'chateado: seco, sem iniciativa'}).`,
       `Você agora: ${this.trabalhando(f.id) ? `trabalhando na tarefa "${encurtar(e.pendentes.find((p) => p.funcionario === f.id)?.tarefa ?? '', 160)}"` : 'livre'}.`,
     ];
-    const feito = e.diario.filter((d) => d.quem === f.id).slice(-6).map((d) => `${d.data}: ${encurtar(d.texto, 140)}`);
-    linhas.push(feito.length ? `O que você fez: ${feito.join(' | ')}` : 'Você ainda não fez nenhum trabalho aqui.');
+    const feito = e.diario.filter((d) => d.quem === f.id).slice(-6).map((d) => `${this.quando(d.em, d.data)}: ${encurtar(d.texto, 140)}`);
+    linhas.push(feito.length ? `O que você fez (com quando foi): ${feito.join(' | ')}` : 'Você ainda não fez nenhum trabalho aqui, nem hoje nem antes.');
+    const admitido = e.diario.find((d) => d.quem === f.id || d.texto.includes(f.nome));
+    if (admitido) linhas.push(`Você entrou no escritório ${this.quando(admitido.em, admitido.data)}.`);
+    const lembrancas = (e.vida?.[f.id] ?? []).slice(-8).map((v) => `${this.quando(v.em)} ${v.tipo === 'ouviu' ? `ouviu de ${v.com}` : v.tipo === 'disse' ? `disse${v.com ? ` a ${v.com}` : ''}` : v.tipo}: ${v.texto}`);
+    if (lembrancas.length) linhas.push(`O que você pensou, disse, ouviu e fez por aí (é memória sua, use se fizer sentido): ${lembrancas.join(' | ')}`);
     const vida = e.agenda?.data === hoje() ? e.agenda?.vida?.[f.id] : undefined;
     if (vida) linhas.push(`Sua vida hoje: ${vida}`);
     const equipe = e.equipe.filter((x) => x.id !== f.id).map((x) => `${x.nome} (${tituloDe(x)}, ${x.ferias ? 'férias' : this.trabalhando(x.id) ? 'trabalhando' : 'livre'})`);
     linhas.push(`Equipe: ${equipe.length ? equipe.join(', ') : 'só você e o gestor'}.`);
     if (f.cargo === 'chefe') {
+      const daEquipe = e.diario.filter((d) => d.quem !== f.id && d.quem !== 'voce' && e.equipe.some((x) => x.id === d.quem)).slice(-10)
+        .map((d) => `${this.quando(d.em, d.data)}, ${this.nomeDe(d.quem)}: ${encurtar(d.texto, 140)}`);
+      linhas.push(daEquipe.length ? `O que a equipe fez (com quando foi): ${daEquipe.join(' | ')}` : 'A equipe ainda não fez nenhum trabalho.');
+      const abertos = [...this.acessos.values()].map((a) => `${this.nomeDe(a.funcionario)} precisa de "${encurtar(a.oque, 80)}"`);
+      if (abertos.length) linhas.push(`Pedidos de acesso esperando o gestor: ${abertos.join('; ')}.`);
       linhas.push(`Cargos que dá para contratar nesta área: ${area(e.escritorio?.area).cargos.map((c) => `${c} (${CARGOS[c].titulo})`).join(', ')}.`);
       const rel = Object.entries(e.relatorio);
       linhas.push(rel.length ? `Relatório até agora: ${rel.map(([k, v]) => `${k}: ${encurtar(v, 160)}`).join(' | ')}` : 'Relatório: vazio ainda.');
@@ -687,7 +929,7 @@ export class Orquestrador extends EventEmitter {
     }
     // Ao religar (novo dia/app), lembra a conversa recente.
     if (!this.conversouDesdeQueLigou.has(f.id)) {
-      const recente = (e.conversas[f.id] ?? []).slice(-9, -1).map((m) => `${m.de === 'voce' ? 'Gestor' : 'Você'}: ${encurtar(m.texto, 200)}`);
+      const recente = (e.conversas[f.id] ?? []).slice(-9, -1).map((m) => `(${this.quando(m.em)}) ${m.de === 'voce' ? 'Gestor' : 'Você'}: ${encurtar(m.texto, 200)}`);
       if (recente.length) linhas.push(`Conversa recente: ${recente.join(' / ')}`);
     }
     return linhas.join('\n');
@@ -766,6 +1008,221 @@ export class Orquestrador extends EventEmitter {
     return { resposta, falhou };
   }
 
+  // Aval do chefe: mudança grande ou arriscada (repaginar, reiniciar servidor,
+  // apagar muito, publicar). O chefe decide de verdade (o modelo dele, lendo o
+  // projeto); só leva ao gestor o que ele mesmo não pode resolver.
+  private async avalDoChefe(f: Funcionario, oque: string, porque: string): Promise<string> {
+    const chefe = this.chefe;
+    if (!chefe || !this.estado.projeto) return 'Não há chefe para dar aval: use o bom senso, faça o mínimo arriscado e explique no relatório.';
+    this.doEscritorio({ tipo: 'aval_pedido', funcionario: f.id, chefe: chefe.id, oque, porque });
+    const prompt = [
+      `${f.nome} (${tituloDe(f)}) está trabalhando e pede o seu aval antes de uma mudança grande.`,
+      `O que quer fazer: ${oque}`,
+      `Por quê: ${porque}`,
+      `Tarefa dele agora: ${encurtar(this.estado.pendentes.find((p) => p.funcionario === f.id)?.tarefa ?? '(sem registro)', 400)}`,
+      'Relatório do escritório: ' + (Object.entries(this.estado.relatorio).map(([k, v]) => `${k}: ${encurtar(v, 200)}`).join(' | ') || '(vazio)'),
+      '',
+      'Decida você mesmo, como chefe. Pode ler o projeto para decidir. Só leve ao gestor (o dono) o que você realmente não pode decidir: senha ou login de conta dele, dinheiro, publicar em nome dele, ou algo que contradiz o que ele pediu.',
+      'Responda com a primeira linha exatamente uma destas: "DECISÃO: APROVADO", "DECISÃO: NEGADO" ou "DECISÃO: LEVAR AO GESTOR". Depois, em até 3 frases, a orientação para a pessoa (como fazer com segurança, ou o que fazer no lugar).',
+    ].join('\n');
+    let resposta = '';
+    const sessao = this.novaSessao(
+      {
+        pasta: this.estado.projeto.pasta,
+        funcionario: chefe.id,
+        tarefa: prompt,
+        modelo: chefe.modelo,
+        instrucoes: `Você é ${chefe.nome}, ${tituloDe(chefe)} do escritório "${this.estado.escritorio?.nome ?? ''}". Decide pedidos de aval da equipe com responsabilidade e sem burocracia: se é razoável para o projeto, aprove com orientação.`,
+        conversa: true,
+        ferramentasProibidas: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Task', 'Agent'],
+      },
+      { funcionario: chefe.id, projeto: this.estado.projeto.pasta, tarefa: `aval para ${f.nome}`, conversa: true, interno: true },
+    );
+    sessao.on('evento', (ev: Evento) => { if (ev.tipo === 'tarefa_terminada') resposta = ev.resultado ?? ''; });
+    await this.sessoes.get(sessao.id)!.fim;
+    const decisao = resposta.match(/DECIS[ÃA]O:\s*(APROVADO|NEGADO|LEVAR AO GESTOR)/i)?.[1]?.toUpperCase() ?? 'NEGADO';
+    const orientacao = semMarcacao(resposta.replace(/^.*DECIS[ÃA]O:[^\n]*\n?/i, '').trim()) || (resposta ? '' : 'Não consegui avaliar agora; faça do jeito menos arriscado.');
+    if (decisao === 'LEVAR AO GESTOR') {
+      this.doEscritorio({ tipo: 'aval_respondido', funcionario: f.id, chefe: chefe.id, aprovado: false, orientacao: 'Vou levar ao gestor.' });
+      this.diario(chefe.id, `Levou ao gestor o pedido de ${f.nome}: ${encurtar(oque, 100)}`);
+      return this.pedirAcesso(f, oque, `${porque} (${chefe.nome}: ${encurtar(orientacao, 200)})`);
+    }
+    const aprovado = decisao === 'APROVADO';
+    this.doEscritorio({ tipo: 'aval_respondido', funcionario: f.id, chefe: chefe.id, aprovado, orientacao: encurtar(orientacao, 300) });
+    this.diario(chefe.id, `${aprovado ? 'Deu aval' : 'Não deu aval'} a ${f.nome}: ${encurtar(oque, 100)}`);
+    return `${chefe.nome} (chefe) ${aprovado ? 'APROVOU' : 'NÃO APROVOU'}. ${orientacao}`;
+  }
+
+  // Cada computador é de alguém: a pasta pessoal (Downloads, Imagens, Notas) fica
+  // fora do projeto e é só da pessoa.
+  pastaPessoal(id: string) {
+    if (id !== 'voce' && !this.funcionario(id)) throw new Error('computador desconhecido');
+    const p = path.join(PASTA_DADOS, 'pessoal', slug(id));
+    for (const sub of ['Downloads', 'Imagens', 'Notas']) fs.mkdirSync(path.join(p, sub), { recursive: true });
+    return p;
+  }
+  // Uma coisa pessoal no próprio computador (pesquisar um hobby, salvar fotos,
+  // anotar algo): uma sessão de verdade, pequena, na pasta pessoal.
+  private ultimaAtividadePessoal = new Map<string, number>();
+  private atividadePessoalRodando = false;
+  private atividadePessoal(f: Funcionario, oque: string) {
+    if (this.atividadePessoalRodando || !this.estado.internet || this.almocoAte || this.trabalhando(f.id)) return false;
+    if (Date.now() - (this.ultimaAtividadePessoal.get(f.id) ?? 0) < 30 * 60_000) return false;
+    this.ultimaAtividadePessoal.set(f.id, Date.now());
+    this.atividadePessoalRodando = true;
+    const pasta = this.pastaPessoal(f.id);
+    this.doEscritorio({ tipo: 'vida', funcionario: f.id, acao: 'computador', pensamento: oque });
+    let resultado = '';
+    const sessao = this.novaSessao(
+      {
+        pasta,
+        funcionario: f.id,
+        tarefa: `Seu momento livre no seu próprio computador. Você quer: ${oque}\nFaça de verdade, rápido (poucos passos): pesquise na internet se precisar; se for salvar imagens, baixe com curl para Imagens/ (ex.: https://cataas.com/cat para fotos de gato, ou um link direto de imagem que você achou); anotações vão em Notas/ (.md); arquivos baixados em Downloads/. No fim, diga em uma frase, em primeira pessoa e no seu jeito, o que você fez.`,
+        modelo: 'haiku',
+        instrucoes: `Você é ${f.nome}. Isto é pessoal, não é trabalho do escritório. Fique só na sua pasta pessoal. Nada de comprar, cadastrar, logar em contas ou postar.`,
+        ferramentasProibidas: ['Task', 'Agent', 'NotebookEdit'],
+      },
+      { funcionario: f.id, projeto: pasta, tarefa: `pessoal: ${oque}`, interno: true },
+    );
+    sessao.on('evento', (ev: Evento) => { if (ev.tipo === 'tarefa_terminada') resultado = ev.resultado ?? ''; });
+    this.sessoes.get(sessao.id)!.fim!.finally(() => {
+      this.atividadePessoalRodando = false;
+      const feito = semMarcacao(resultado).split('\n')[0]?.trim();
+      this.lembrar(f.id, 'fez', `no meu computador: ${feito || oque}`);
+      this.doEscritorio({ tipo: 'vida', funcionario: f.id, acao: 'mesa', ...(feito ? { pensamento: feito } : {}) });
+    });
+    return true;
+  }
+
+  // ---------- vida de verdade ----------
+  // Ações no escritório que a pessoa decide (ou que o gestor pede): a tela anda
+  // com ela até lá. "Buscar café para o gestor" leva o café até a mesa dele.
+  static readonly ACOES = ['ficar', 'mesa', 'bebedouro', 'cafe', 'sofa', 'janela', 'planta', 'tv', 'buscar_cafe_gestor', 'buscar_agua_gestor', 'ir_ate_gestor'] as const;
+  private ferramentaDeAcao(f: Funcionario) {
+    return tool(
+      'fazer_no_escritorio',
+      'Faz algo de verdade no escritório: ir à mesa, ao bebedouro, à cafeteira, ao sofá, à janela, regar a planta, ver TV, ir até a mesa do gestor, ou buscar café/água para o gestor (leva até ele). Use quando decidir fazer algo ou quando o gestor pedir.',
+      { acao: z.enum(Orquestrador.ACOES), com: z.string().optional().describe('id de um colega, se for conversar com alguém') },
+      async ({ acao, com }) => {
+        this.agir(f, acao, com);
+        return { content: [{ type: 'text' as const, text: `Feito: você foi ${acao.replace(/_/g, ' ')}.` }] };
+      },
+      SEMPRE,
+    );
+  }
+  // Conversa de verdade entre colegas: quem fala vai até o outro, o outro
+  // responde com a própria cabeça (persona, fatos e memória dele) e os dois lembram.
+  private falandoCom = new Set<string>();
+  async conversarComColega(de: Funcionario, paraId: string, mensagem: string): Promise<string> {
+    const para = this.funcionario(paraId);
+    if (!para) return `Não há ninguém chamado "${paraId}" na equipe. Equipe: ${this.estado.equipe.map((x) => `${x.nome} (id "${x.id}")`).join(', ')}.`;
+    if (para.id === de.id) return 'Você não pode falar com você mesmo.';
+    if (para.ferias) return `${para.nome} está de férias.`;
+    if (this.falandoCom.has(`${para.id}>${de.id}`)) return `${para.nome} está falando com você agora mesmo: responda direto a ele.`;
+    const chave = `${de.id}>${para.id}`;
+    this.falandoCom.add(chave);
+    try {
+      this.doEscritorio({ tipo: 'vida', funcionario: de.id, acao: 'ir_ate_colega', para: para.id, fala: encurtar(mensagem, 200) });
+      this.lembrar(de.id, 'disse', mensagem, para.nome);
+      this.lembrar(para.id, 'ouviu', mensagem, de.nome);
+      const prompt = `${this.fatosPara(para)}\n\n[Colega] ${de.nome} (${tituloDe(de)}) veio até você${this.trabalhando(para.id) ? ' enquanto você trabalha' : ''} e disse:\n${mensagem}\n\nResponda a ${de.nome} como colega de trabalho, curto e de verdade. Se ele pedir um trabalho seu, você pode começar (comecar_tarefa).`;
+      const resposta = await Promise.race([
+        this.personaDe(para).falar(prompt),
+        new Promise<string>((r) => setTimeout(() => r(''), 120_000)),
+      ]);
+      const r = semMarcacao(resposta).trim();
+      if (!r) return `${para.nome} não respondeu agora.`;
+      this.lembrar(para.id, 'disse', r, de.nome);
+      this.lembrar(de.id, 'ouviu', r, para.nome);
+      this.doEscritorio({ tipo: 'vida', funcionario: para.id, para: de.id, fala: encurtar(r, 220) });
+      return `${para.nome} respondeu: ${r}`;
+    } finally {
+      this.falandoCom.delete(chave);
+      setTimeout(() => this.doEscritorio({ tipo: 'vida', funcionario: de.id, acao: this.trabalhando(de.id) ? 'mesa' : 'mesa' }), 6000);
+    }
+  }
+  private ferramentaDeConversa(f: Funcionario) {
+    return tool(
+      'falar_com_colega',
+      'Vai até um colega e fala com ele de verdade (pergunta, combina algo, passa um recado, pede ajuda). A resposta dele volta para você. Use quando o gestor pedir para falar com alguém, ou quando você precisar de alguém da equipe.',
+      { colega: z.string().describe('id ou nome do colega'), mensagem: z.string().describe('o que você diz a ele, completo') },
+      async ({ colega, mensagem }) => ({ content: [{ type: 'text' as const, text: await this.conversarComColega(f, colega, mensagem) }] }),
+      SEMPRE,
+    );
+  }
+
+  private lembrar(id: string, tipo: 'pensou' | 'disse' | 'ouviu' | 'fez', texto: string, com?: string) {
+    const v = (this.estado.vida ??= {});
+    const l = (v[id] ??= []);
+    l.push({ em: new Date().toISOString(), tipo, texto: encurtar(texto, 240), ...(com ? { com } : {}) });
+    if (l.length > 20) l.splice(0, l.length - 20);
+    this.salvar();
+  }
+  private agir(f: Funcionario, acao: string, com?: string) {
+    if (!(Orquestrador.ACOES as readonly string[]).includes(acao) || acao === 'ficar') return;
+    const nomes: Record<string, string> = { mesa: 'voltou para a mesa', bebedouro: 'foi ao bebedouro', cafe: 'foi pegar um café', sofa: 'sentou no sofá', janela: 'foi olhar pela janela', planta: 'regou a planta', tv: 'foi ver a TV', buscar_cafe_gestor: 'buscou um café para o gestor', buscar_agua_gestor: 'buscou água para o gestor', ir_ate_gestor: 'foi até a mesa do gestor' };
+    this.lembrar(f.id, 'fez', nomes[acao] ?? acao);
+    this.doEscritorio({ tipo: 'vida', funcionario: f.id, acao, ...(com ? { para: com } : {}) });
+  }
+  private ultimoMomento = new Map<string, number>();
+  private relogioVida?: NodeJS.Timeout;
+  private iniciarVida() {
+    clearInterval(this.relogioVida);
+    this.relogioVida = setInterval(() => {
+      if (!this.estado.aberto || this.encerrando || this.almocoAte || !this.estado.boasVindas) return;
+      const livres = this.estado.equipe.filter((x) => !x.ferias && !this.trabalhando(x.id) && !this.ocupado(x.id) && !this.personas.get(x.id)?.ocupada && Date.now() - (this.ultimoMomento.get(x.id) ?? 0) > 4 * 60_000);
+      if (!livres.length) return;
+      const f = livres[Math.floor(Math.random() * livres.length)];
+      this.momentoLivre(f).catch(() => {});
+    }, 75_000);
+    this.relogioVida.unref?.();
+  }
+  // Um momento livre: a pessoa pensa e decide o que dizer e fazer. Fica na memória dela.
+  private async momentoLivre(f: Funcionario, ouviu?: { de: Funcionario; fala: string }, profundidade = 0) {
+    this.ultimoMomento.set(f.id, Date.now());
+    const livres = this.estado.equipe.filter((x) => x.id !== f.id && !x.ferias && !this.trabalhando(x.id)).map((x) => `${x.nome} (id "${x.id}")`);
+    const trabalhando = this.estado.equipe.filter((x) => x.id !== f.id && this.trabalhando(x.id)).map((x) => x.nome);
+    const recente = this.estado.diario.slice(-4).map((d) => `${this.quando(d.em, d.data)}, ${this.nomeDe(d.quem)}: ${encurtar(d.texto, 90)}`);
+    const prompt = [
+      this.fatosPara(f),
+      '',
+      ouviu
+        ? `[Momento livre] ${ouviu.de.nome} acabou de te dizer: "${ouviu.fala}". Ninguém mais falou com você.`
+        : '[Momento livre] Ninguém falou com você agora. Você está no escritório, sem tarefa no momento.',
+      `Colegas livres: ${livres.join(', ') || 'ninguém'}. Trabalhando: ${trabalhando.join(', ') || 'ninguém'}.`,
+      recente.length ? `Aconteceu há pouco: ${recente.join(' | ')}` : '',
+      'Pense como você mesmo, de verdade, no seu dia (sua vida, seu humor, o trabalho, os colegas). Não repita o que já pensou ou disse antes. Falar é opcional: muita gente só pensa.',
+      'Responda SÓ neste formato, 4 linhas:',
+      'PENSA: <o que você pensa agora, 1 frase>',
+      'DIZ: <o que você fala em voz alta, curto, ou "nada">',
+      'PARA: <id do colega com quem fala, ou "ninguém">',
+      `FAZ: <uma de: ${Orquestrador.ACOES.filter((a) => !a.includes('gestor')).join(', ')}, computador>`,
+      'NO PC: <se FAZ for computador: o que você vai fazer de pessoal no seu computador (ex.: pesquisar sobre o seu hobby, salvar umas fotos de algo que você ama, anotar uma receita), senão "nada">',
+    ].filter(Boolean).join('\n');
+    const r = await this.personaDe(f).falar(prompt);
+    const campo = (n: string) => r.match(new RegExp(`^\\s*${n}:\\s*(.+)$`, 'im'))?.[1]?.trim() ?? '';
+    const pensa = semMarcacao(campo('PENSA'));
+    let diz = semMarcacao(campo('DIZ')).replace(/^["“]|["”]$/g, '');
+    if (/^(nada|-|—)$/i.test(diz)) diz = '';
+    const paraId = slug(campo('PARA'));
+    const para = this.estado.equipe.find((x) => x.id === paraId && x.id !== f.id);
+    const faz = campo('FAZ').toLowerCase().replace(/[^a-z_]/g, '');
+    if (pensa) this.lembrar(f.id, 'pensou', pensa);
+    if (diz) {
+      this.lembrar(f.id, 'disse', diz, para?.nome);
+      if (para) this.lembrar(para.id, 'ouviu', diz, f.nome);
+    }
+    this.doEscritorio({ tipo: 'vida', funcionario: f.id, ...(diz ? { fala: diz } : {}), ...(para ? { para: para.id } : {}), ...(pensa ? { pensamento: pensa } : {}) });
+    const noPc = semMarcacao(campo('NO PC'));
+    if (faz === 'computador' && noPc && !/^nada$/i.test(noPc)) {
+      if (!this.atividadePessoal(f, noPc)) this.agir(f, 'mesa');
+    } else if ((Orquestrador.ACOES as readonly string[]).includes(faz) && !faz.includes('gestor')) this.agir(f, faz, para?.id);
+    // o colega responde de verdade (no máximo uma volta)
+    if (diz && para && profundidade < 1 && !this.trabalhando(para.id) && !para.ferias) {
+      setTimeout(() => { this.momentoLivre(para, { de: f, fala: diz }, profundidade + 1).catch(() => {}); }, 3500);
+    }
+  }
+
   private ferramentasDoFuncionario(f: Funcionario) {
     const texto = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
     return {
@@ -774,6 +1231,8 @@ export class Orquestrador extends EventEmitter {
         name: 'escritorio',
         version: '1.1.0',
         tools: [
+          this.ferramentaDeAcao(f),
+          this.ferramentaDeConversa(f),
           tool(
             'comecar_tarefa',
             'Vai para a sua mesa fazer um trabalho que o gestor pediu. É o ÚNICO jeito de trabalhar: use sempre que o gestor pedir para criar, mudar, consertar, testar, pesquisar ou escrever algo.',
@@ -815,6 +1274,8 @@ export class Orquestrador extends EventEmitter {
         name: 'escritorio',
         version: '1.1.0',
         tools: [
+          this.ferramentaDeAcao(chefe),
+          this.ferramentaDeConversa(chefe),
           tool(
             'planejar',
             'Para trabalho novo, planejar, delegar, revisar ou responder dúvida do projeto: você pensa com calma (vê a equipe, delega tarefas, pede contratação) e a resposta detalhada chega logo depois.',
@@ -876,6 +1337,7 @@ export class Orquestrador extends EventEmitter {
         ...Object.entries(e.relatorio).flatMap(([k, v]) => [`## ${k}`, '', v, '']),
       ].join('\n');
       fs.writeFileSync(path.join(esc.projeto, 'ESCRITORIO.md'), md);
+      fs.writeFileSync(path.join(this.pastaDrive(), 'Documentos', 'Relatório do escritório.md'), md);
       esc.commitPrincipal('ESCRITORIO.md', `Relatório do escritório (${this.chefe?.nome ?? 'chefe'})`);
     } catch {}
   }
@@ -1201,9 +1663,13 @@ export class Orquestrador extends EventEmitter {
   // ---------- os computadores ----------
   // Onde fica cada computador: o da mesa de alguém, o do gestor, ou a pasta principal.
   pastaDoComputador(alvo: string): string {
+    if (alvo === 'drive' || alvo === 'compartilhados') return this.pastaDrive();
+    if (alvo.startsWith('pessoal-')) return this.pastaPessoal(alvo.slice(8));
     const esc = this.escritorio();
     if (alvo === 'principal') return esc.projeto;
     if (alvo === 'voce') return esc.mesa('voce').pasta;
+    if (alvo === 'drive' || alvo === 'compartilhados') return this.pastaDrive();
+    if (alvo.startsWith('pessoal-')) return this.pastaPessoal(alvo.slice(8));
     const f = this.funcionario(alvo);
     if (!f) throw new Error('computador desconhecido');
     return esc.mesa(f.id).pasta;
@@ -1233,11 +1699,14 @@ export class Orquestrador extends EventEmitter {
 
   listarArquivos(alvo: string, relativo = '') {
     const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    const idx = alvo === 'drive' ? this.indiceDrive() : {};
     const itens = fs.readdirSync(abs, { withFileTypes: true })
-      .filter((d) => d.name !== '.git')
+      .filter((d) => d.name !== '.git' && !(alvo === 'drive' && d.name === '.indice.json'))
       .map((d) => {
         const st = fs.statSync(path.join(abs, d.name));
-        return { nome: d.name, pasta: d.isDirectory(), tamanho: st.size, modificado: st.mtime.toISOString() };
+        const i = idx[rel ? `${rel}/${d.name}` : d.name];
+        const dentro = d.isDirectory() ? (() => { try { return fs.readdirSync(path.join(abs, d.name)).filter((n) => n !== '.git').length; } catch { return 0; } })() : undefined;
+        return { nome: d.name, pasta: d.isDirectory(), tamanho: st.size, modificado: st.mtime.toISOString(), criado: st.birthtime.toISOString(), ...(dentro !== undefined ? { itens: dentro } : {}), ...(i?.de ? { de: i.de } : {}), ...(i?.recado ? { recado: i.recado } : {}) };
       })
       .sort((a, b) => (a.pasta === b.pasta ? a.nome.localeCompare(b.nome) : a.pasta ? -1 : 1));
     return { caminho: rel === '' ? '' : rel, itens };
@@ -1295,39 +1764,72 @@ export class Orquestrador extends EventEmitter {
     return { caminho: b.rel };
   }
 
-  // Apagar vai para a lixeira do escritório (fora do projeto): dá para desfazer.
-  private lixeira = new Map<string, { origem: string; guardado: string }>();
+  // Lixeira do escritório (fora do projeto, persiste entre dias): dá para desfazer.
+  private arquivoLixeira() { return path.join(PASTA_DADOS, 'lixeira', 'indice.json'); }
+  private lerLixeira(): Record<string, { origem: string; guardado: string; alvo: string; caminho: string; em: string; pasta: boolean }> {
+    try { return JSON.parse(fs.readFileSync(this.arquivoLixeira(), 'utf8')); } catch { return {}; }
+  }
+  private gravarLixeira(l: ReturnType<Orquestrador['lerLixeira']>) {
+    fs.mkdirSync(path.dirname(this.arquivoLixeira()), { recursive: true });
+    fs.writeFileSync(this.arquivoLixeira(), JSON.stringify(l, null, 1));
+  }
+  private moverFisico(de: string, para: string) {
+    fs.mkdirSync(path.dirname(para), { recursive: true });
+    try { fs.renameSync(de, para); } catch { fs.cpSync(de, para, { recursive: true }); fs.rmSync(de, { recursive: true, force: true }); }
+  }
   apagar(alvo: string, relativo: string) {
     const { abs, rel } = this.caminhoSeguro(alvo, relativo);
     if (!rel) throw new Error('não dá para apagar a pasta inteira do computador');
     if (!fs.existsSync(abs)) throw new Error('não encontrei esse item');
     const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const guardado = path.join(PASTA_DADOS, 'lixeira', id, path.basename(abs));
-    fs.mkdirSync(path.dirname(guardado), { recursive: true });
-    try {
-      fs.renameSync(abs, guardado);
-    } catch {
-      fs.cpSync(abs, guardado, { recursive: true });
-      fs.rmSync(abs, { recursive: true, force: true });
-    }
-    this.lixeira.set(id, { origem: abs, guardado });
+    const pasta = fs.statSync(abs).isDirectory();
+    this.moverFisico(abs, guardado);
+    const l = this.lerLixeira();
+    l[id] = { origem: abs, guardado, alvo, caminho: rel, em: new Date().toISOString(), pasta };
+    this.gravarLixeira(l);
     return { id, caminho: rel };
   }
-
   restaurar(id: string) {
-    const item = this.lixeira.get(id);
+    const l = this.lerLixeira();
+    const item = l[id];
     if (!item) throw new Error('esse item não está mais na lixeira');
     if (fs.existsSync(item.origem)) throw new Error('já existe algo com esse nome no lugar');
-    fs.mkdirSync(path.dirname(item.origem), { recursive: true });
-    try {
-      fs.renameSync(item.guardado, item.origem);
-    } catch {
-      fs.cpSync(item.guardado, item.origem, { recursive: true });
-      fs.rmSync(item.guardado, { recursive: true, force: true });
-    }
-    this.lixeira.delete(id);
-    return { ok: true };
+    this.moverFisico(item.guardado, item.origem);
+    fs.rmSync(path.dirname(item.guardado), { recursive: true, force: true });
+    delete l[id];
+    this.gravarLixeira(l);
+    return { ok: true, alvo: item.alvo, caminho: item.caminho };
   }
+  listarLixeira() {
+    return Object.entries(this.lerLixeira()).map(([id, i]) => {
+      let tamanho = 0;
+      try { tamanho = fs.statSync(i.guardado).size; } catch {}
+      return { id, nome: path.basename(i.caminho), alvo: i.alvo, caminho: i.caminho, em: i.em, pasta: i.pasta, tamanho };
+    }).sort((a, b) => b.em.localeCompare(a.em));
+  }
+  esvaziarLixeira() {
+    const l = this.lerLixeira();
+    for (const i of Object.values(l)) fs.rmSync(path.dirname(i.guardado), { recursive: true, force: true });
+    this.gravarLixeira({});
+    return { apagados: Object.keys(l).length };
+  }
+  // Copiar e mover entre lugares (projeto, pasta pessoal, Drive), sem sobrescrever nada.
+  transferir(modo: 'copiar' | 'mover', de: { alvo: string; caminho: string }, para: { alvo: string; pasta: string }) {
+    const a = this.caminhoSeguro(de.alvo, de.caminho);
+    const b = this.caminhoSeguro(para.alvo, para.pasta);
+    if (!a.rel) throw new Error('não dá para mover a pasta inteira do computador');
+    if (!fs.existsSync(a.abs)) throw new Error(`não encontrei ${de.caminho}`);
+    if (!fs.existsSync(b.abs) || !fs.statSync(b.abs).isDirectory()) throw new Error('o destino não é uma pasta');
+    if (b.abs === a.abs || b.abs.startsWith(a.abs + path.sep)) throw new Error('não dá para pôr uma pasta dentro dela mesma');
+    if (modo === 'mover' && path.dirname(a.abs) === b.abs) return { caminho: a.rel };
+    const nome = this.nomeLivre(b.abs, path.basename(a.abs).replace(/^(.*?)( \(\d+\))?(\.[^.]*)?$/, modo === 'copiar' && path.dirname(a.abs) === b.abs ? '$1 (cópia)$3' : '$&'));
+    const destino = path.join(b.abs, nome);
+    if (modo === 'copiar') fs.cpSync(a.abs, destino, { recursive: true });
+    else this.moverFisico(a.abs, destino);
+    return { caminho: path.relative(this.pastaDoComputador(para.alvo), destino) };
+  }
+
 
   private relogioPersonas?: NodeJS.Timeout;
   private agendaNovatos?: NodeJS.Timeout;
@@ -1337,6 +1839,7 @@ export class Orquestrador extends EventEmitter {
   }
 
   desligar() {
+    clearInterval(this.relogioVida);
     for (const r of this.sessoes.values()) r.sessao.parar();
     this.desligarPersonas();
   }

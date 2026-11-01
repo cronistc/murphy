@@ -94,7 +94,8 @@ function estadoPublico() {
     equipe: e.equipe.map((f) => ({ ...f, titulo: tituloDe(f), ocupado: escritorio.ocupado(f.id), trabalhando: escritorio.trabalhando(f.id) })),
     conversas: Object.fromEntries(Object.entries(e.conversas).map(([k, v]) => [k, v.slice(-60)])),
     contratacoes: [...escritorio.contratacoes].map(([id, c]) => ({ id, ...c, titulo: CARGOS[c.cargo].titulo })),
-    aprovarTudo: e.aprovarTudo,
+    acessos: [...escritorio.acessos.values()],
+    computadores: { ...(e.computador ? { voce: e.computador } : {}), ...(e.computadores ?? {}) },
     internet: e.internet,
     almocoAte: escritorio.almocoAte,
     agenda: e.agenda,
@@ -174,6 +175,16 @@ const servidor = http.createServer(async (req, res) => {
       if (acao === 'bronca') escritorio.ajustarHumor(id, -15, 'bronca do gestor');
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'POST' && (m = url.pathname.match(/^\/acessos\/([\w-]+)$/))) {
+      const { resposta, negar } = await lerJson(req);
+      escritorio.responderAcesso(m[1], String(resposta ?? '').trim(), Boolean(negar));
+      return json(res, 200, { ok: true });
+    }
+    if (rota === 'GET /drive') return json(res, 200, escritorio.listarDrive(url.searchParams.get('caminho') ?? ''));
+    if (rota === 'POST /computador') {
+      const c = await lerJson(req);
+      return json(res, 200, escritorio.personalizarComputador(String(c.alvo ?? 'voce'), c));
+    }
     if (req.method === 'POST' && (m = url.pathname.match(/^\/permissoes\/([\w-]+)$/))) {
       const { aprovar, motivo } = await lerJson(req);
       escritorio.responderPermissao(m[1], Boolean(aprovar), motivo);
@@ -245,6 +256,12 @@ const servidor = http.createServer(async (req, res) => {
       const p = await lerJson(req);
       return json(res, 200, escritorio.apagar(String(p.alvo ?? 'voce'), String(p.caminho ?? '')));
     }
+    if (rota === 'POST /arquivo/copiar' || rota === 'POST /arquivo/mover') {
+      const p = await lerJson(req);
+      return json(res, 200, escritorio.transferir(rota.endsWith('copiar') ? 'copiar' : 'mover', p.de ?? {}, p.para ?? {}));
+    }
+    if (rota === 'GET /lixeira') return json(res, 200, { itens: escritorio.listarLixeira() });
+    if (rota === 'POST /lixeira/esvaziar') return json(res, 200, escritorio.esvaziarLixeira());
     if (rota === 'POST /arquivo/restaurar') return json(res, 200, escritorio.restaurar(String((await lerJson(req)).id ?? '')));
     if (rota === 'PUT /arquivo') {
       const { alvo = 'voce', caminho, conteudo } = await lerJson(req);

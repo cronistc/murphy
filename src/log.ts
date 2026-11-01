@@ -15,6 +15,12 @@ const ICONE: Record<Evento['tipo'], string> = {
   ferramenta_resultado: '📎',
   permissao_pedida: '✋',
   permissao_respondida: '🧑‍💼',
+  acesso_pedido: '🔑',
+  acesso_respondido: '🔓',
+  compartilhado: '📥',
+  aval_pedido: '🙋',
+  vida: '🌱',
+  aval_respondido: '👍',
   cota: '⏱️',
   compactacao: '🚻',
   tarefa_terminada: '🏁',
@@ -126,6 +132,24 @@ export function formatar(ev: Evento): string {
       break;
     case 'pensando':
       corpo = `${ev.funcionario}: ${ev.motivo}${ev.ate ? ' (pronto)' : ''}`;
+      break;
+    case 'acesso_pedido':
+      corpo = `[${ev.idPedido}] ${ev.funcionario}: ${ev.oque} (${ev.porque})`;
+      break;
+    case 'acesso_respondido':
+      corpo = `[${ev.idPedido}] ${ev.aprovado ? 'respondido' : 'não liberado'}`;
+      break;
+    case 'compartilhado':
+      corpo = `${ev.funcionario}: ${ev.nome}`;
+      break;
+    case 'vida':
+      corpo = `${ev.funcionario}${ev.acao ? ` [${ev.acao}]` : ''}${ev.fala ? ` diz${ev.para ? ` a ${ev.para}` : ''}: ${ev.fala}` : ''}${ev.pensamento ? ` (pensa: ${ev.pensamento})` : ''}`;
+      break;
+    case 'aval_pedido':
+      corpo = `${ev.funcionario} → ${ev.chefe}: ${ev.oque}`;
+      break;
+    case 'aval_respondido':
+      corpo = `${ev.chefe} → ${ev.funcionario}: ${ev.aprovado ? 'aprovado' : 'não aprovado'} (${ev.orientacao})`;
       break;
     case 'tarefa_delegada':
       corpo = `${ev.de} → ${ev.para}: ${encurtar(ev.tarefa, 120)}`;
