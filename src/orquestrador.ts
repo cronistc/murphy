@@ -419,6 +419,7 @@ export class Orquestrador extends EventEmitter {
       'Só o que é do gestor (o dono) passa por ele, via pedir_acesso (o chefe leva o pedido): login ou senha de uma conta, pagamento. Nunca invente credenciais.',
       'Precisa de alguém da equipe (uma dúvida, combinar algo, pedir ajuda)? Use falar_com_colega: é conversa de verdade, a resposta volta para você.',
       'Se algo deve chegar na mão do gestor (documento, imagem, planilha, prévia), use compartilhar_com_gestor: vai para o Drive da empresa com um nome claro para um leigo. Isso não muda o projeto, que continua bem feito e organizado do jeito técnico certo.',
+      'Entregue coisas que o gestor possa VER e usar (uma página que abre, um documento formatado, uma imagem, uma planilha), não só uma descrição: ele acompanha o seu trabalho pela tela e abre a entrega com prévias. A qualidade técnica continua a de um profissional.',
       'Sua última mensagem vira o seu relatório para o gestor: em português claro, diga o que fez, onde está, como conferir (com a evidência real) e o que falta.',
       `Hoje é ${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
     ].filter(Boolean).join('\n');

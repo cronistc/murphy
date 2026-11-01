@@ -13,6 +13,7 @@ import {
 import { W, H, desenharMundo, corDoModelo } from './desenho.js';
 import { desenharRetrato } from './retrato.js';
 import { criarExplorador, iconeDe } from './explorador.js';
+import { passosDaSessao, arquivosMudados, desenharVisual } from './trabalho.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -811,6 +812,10 @@ function aoEvento(ev, instantaneo) {
   const p = personagens.get(id);
   if (p) {
     p.eventos.push(ev);
+    if (ev.tipo === 'tarefa_terminada' && !sessaoConversa.has(ev.sessao)) {
+      registrarEntrega(p, ev);
+      if (!instantaneo && entregas.get(p.id)?.arquivos.length) notificar(`${p.nome} entregou: ${curto(p.tarefa ?? '', 50)} — ver entrega`, () => abrirEntrega(p.id));
+    }
     if (p.eventos.length > 600) p.eventos.splice(0, 200);
     const r = comportamento(ev);
     if (sessaoConversa.has(ev.sessao)) {
@@ -1126,10 +1131,11 @@ function quadro(agora) {
   requestAnimationFrame(quadro);
 }
 
-function notificar(texto) {
+function notificar(texto, acao) {
   const t = document.createElement('div');
-  t.className = 'toast px';
-  t.textContent = `🔔 ${texto}`;
+  t.className = `toast px${acao ? ' acao' : ''}`;
+  t.textContent = `🔔 ${texto}${acao ? ' ›' : ''}`;
+  if (acao) { t.addEventListener('click', () => { t.remove(); acao(); }); setTimeout(() => t.remove(), 14000); }
   $('#toasts').append(t);
   while ($('#toasts').children.length > 3) $('#toasts').firstChild.remove();
   setTimeout(() => t.remove(), 6000);
@@ -1389,27 +1395,100 @@ $('#btnReabrir').addEventListener('click', async () => { $('#fimDia').hidden = t
 // ---------- a tela de um funcionário ----------
 function abrirTelaDele(p) {
   telaAbertaDe = p.id;
+  telaSel = null;
+  telaChave = '';
   $('#telaTitulo').textContent = `Tela de ${p.nome}`;
   $('#telaDele').hidden = false;
   renderizarTelaDele();
 }
+// A tela de quem trabalha: o trabalho de verdade, visual (a página, o documento,
+// o código com o trecho mudado, o comando com ✓/✗), e os passos ao lado.
+let telaSel = null; // índice do passo escolhido (null = ao vivo)
+let telaChave = '';
+function sessaoDeTrabalho(p, sessao) {
+  const inicio = [...p.eventos].reverse().find((e) => e.tipo === 'sessao_iniciada' && !sessaoConversa.has(e.sessao) && (!sessao || e.sessao === sessao));
+  if (!inicio) return null;
+  const eventos = p.eventos.filter((e) => e.sessao === inicio.sessao);
+  return { inicio, eventos, passos: passosDaSessao(eventos, inicio.pasta ?? '') };
+}
+const depVisual = () => ({ api, esc, mdParaHtml });
 function renderizarTelaDele() {
   const p = personagens.get(telaAbertaDe);
   if (!p) return;
+  const s = sessaoDeTrabalho(p);
+  // detalhes técnicos (o log de sempre)
   const linhas = [];
-  for (const ev of p.eventos.slice(-120)) {
-    if (sessaoConversa.has(ev.sessao)) continue;
-    if (ev.tipo === 'sessao_iniciada') linhas.push(`<span class="sis">━━ nova tarefa: ${esc(curto(ev.tarefa, 200))}</span>`);
+  for (const ev of (s?.eventos ?? []).slice(-120)) {
     if (ev.tipo === 'ferramenta_chamada') linhas.push(`<span class="cmd">▶ ${esc(ev.ferramenta)}</span>\n${esc(ev.detalhe ?? ev.resumo)}`);
     if (ev.tipo === 'ferramenta_resultado') linhas.push(`<span class="${ev.erro ? 'err' : 'sis'}">${esc(curto(ev.detalhe ?? ev.resumo, 1200))}</span>`);
     if (ev.tipo === 'texto') linhas.push(`<span class="txt">💬 ${esc(ev.texto)}</span>`);
-    if (ev.tipo === 'tarefa_terminada') linhas.push(`<span class="sis">━━ ${ev.sucesso ? 'terminou' : 'não terminou'} (${(ev.duracaoMs / 1000).toFixed(0)}s)</span>`);
   }
-  const el = $('#telaFunc');
-  const noFim = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
-  el.innerHTML = linhas.join('\n\n') || '<span class="sis">Tela parada. Ainda não fez nada hoje.</span>';
-  if (noFim) el.scrollTop = el.scrollHeight;
+  $('#telaFunc').innerHTML = linhas.join('\n\n');
+  if (!s) {
+    $('#telaTopo').innerHTML = `${esc(p.nome)} ainda não trabalhou hoje.`;
+    $('#telaPassos').innerHTML = '';
+    $('#telaVisual').innerHTML = '<div class="tv-vazio">Tela parada.</div>';
+    telaChave = '';
+    return;
+  }
+  const { inicio, passos } = s;
+  const terminou = passos.some((x) => x.tipo === 'fim');
+  const min = Math.max(1, Math.round((Date.now() - new Date(inicio.em)) / 60000));
+  const arquivos = arquivosMudados(passos);
+  $('#telaTopo').innerHTML = `<b>${esc(curto(inicio.tarefa, 160))}</b><br>${terminou ? 'terminou' : `trabalhando há ${min} min`} · ${passos.length} passos${arquivos.length ? `<div class="tt-chips">${arquivos.map((a) => `<span class="tt-chip" data-arquivo="${esc(a)}">${iconeDe(a)} ${esc(a.split('/').pop())}</span>`).join('')}</div>` : ''}`;
+  const lista = $('#telaPassos');
+  const noFim = lista.scrollTop + lista.clientHeight >= lista.scrollHeight - 20;
+  // ao vivo: mostra o último passo que tem algo para ver
+  const visivel = (x) => (x.tipo === 'arquivo' && !x.leitura) || (x.tipo === 'comando' && (x.ok === false || x.icone === '🧪' || x.ok === null)) || x.tipo === 'pesquisa' || x.tipo === 'site';
+  const vivo = [...passos.keys()].reverse().find((i) => visivel(passos[i])) ?? passos.length - 1;
+  const atual = telaSel ?? vivo;
+  lista.innerHTML = passos.map((x, i) => `<div class="tt-passo${i === atual ? ' sel' : ''}" data-i="${i}"><span>${x.icone}</span><span>${esc(x.texto)}${x.ok === false ? ' <span class="st-erro">✗</span>' : x.tipo === 'comando' && x.ok ? ' <span class="st-ok">✓</span>' : ''}</span><span class="q">${horaCurta(x.em)}</span></div>`).join('');
+  if (noFim && telaSel == null) lista.scrollTop = lista.scrollHeight;
+  $('#telaAoVivo').textContent = telaSel == null ? '● ao vivo' : '○ voltar ao vivo';
+  const chave = `${inicio.sessao}:${atual}:${telaSel == null ? passos.length : ''}:${passos[atual]?.ok}`;
+  if (chave !== telaChave) {
+    telaChave = chave;
+    const passo = passos[atual];
+    desenharVisual($('#telaVisual'), p.id, passo, depVisual());
+  }
 }
+$('#telaPassos').addEventListener('click', (e) => { const d = e.target.closest('[data-i]'); if (d) { telaSel = Number(d.dataset.i); renderizarTelaDele(); } });
+$('#telaAoVivo').addEventListener('click', () => { telaSel = null; renderizarTelaDele(); });
+$('#telaTopo').addEventListener('click', (e) => {
+  const c = e.target.closest('[data-arquivo]');
+  if (c) { telaSel = -1; telaChave = ''; desenharVisual($('#telaVisual'), telaAbertaDe, { tipo: 'arquivo', icone: iconeDe(c.dataset.arquivo), arquivo: c.dataset.arquivo }, depVisual()); }
+});
+
+// Entregas: o que cada um entregou, para ver como é (não só ler o relatório).
+const entregas = new Map();
+function registrarEntrega(p, fim) {
+  const s = sessaoDeTrabalho(p, fim.sessao);
+  if (!s) return;
+  entregas.set(p.id, { tarefa: s.inicio.tarefa, arquivos: arquivosMudados(s.passos), relato: fim.resultado ?? '', sucesso: fim.sucesso, em: fim.em });
+}
+let entregaAberta = null;
+function abrirEntrega(id) {
+  const e = entregas.get(id);
+  const p = personagens.get(id);
+  if (!e || !p) return;
+  fecharModais();
+  entregaAberta = { id, aba: e.arquivos[0] ?? '__relato' };
+  $('#entTitulo').textContent = `📦 Entrega de ${p.nome}`;
+  $('#entTopo').innerHTML = `<b>${esc(curto(e.tarefa, 200))}</b><br>${e.sucesso ? '✅ concluída' : '⚠️ não concluída'} · ${new Date(e.em).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}`;
+  $('#janEntrega').hidden = false;
+  mostrarAbaEntrega();
+}
+function mostrarAbaEntrega() {
+  const e = entregas.get(entregaAberta.id);
+  const abas = [...e.arquivos.map((a) => [a, `${iconeDe(a)} ${a.split('/').pop()}`]), ['__relato', '📋 Relatório']];
+  $('#entAbas').innerHTML = abas.map(([k, t]) => `<button class="neutro pequeno${k === entregaAberta.aba ? ' ativa' : ''}" data-aba="${esc(k)}">${esc(t)}</button>`).join('');
+  $('#entNavegador').hidden = !/\.html?$/i.test(entregaAberta.aba);
+  if (entregaAberta.aba === '__relato') $('#entVisual').innerHTML = `<div class="tv-doc doc">${mdParaHtml(e.relato)}</div>`;
+  else desenharVisual($('#entVisual'), entregaAberta.id, { tipo: 'arquivo', icone: iconeDe(entregaAberta.aba), arquivo: entregaAberta.aba }, depVisual());
+}
+$('#entAbas').addEventListener('click', (ev) => { const b = ev.target.closest('[data-aba]'); if (b) { entregaAberta.aba = b.dataset.aba; mostrarAbaEntrega(); } });
+$('#entNavegador').addEventListener('click', () => { const { id, aba } = entregaAberta; $('#janEntrega').hidden = true; abrirNoJogo(`/previa/${encodeURIComponent(id)}/${aba.split('/').map(encodeURIComponent).join('/')}`); });
+
 $('#telaSentar').addEventListener('click', () => {
   const p = personagens.get(telaAbertaDe);
   $('#telaDele').hidden = true;
@@ -1589,8 +1668,16 @@ const ICONE_TIPO = (n, pasta) => iconeDe(n, pasta);
 // markdown simples → documento bonito (títulos, negrito, listas, links, código)
 function mdParaHtml(t) {
   const linha = (x) => esc(x).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|\W)\*([^*\s][^*]*)\*/g, '$1<i>$2</i>').replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a data-href="$2">$1</a>');
-  const out = []; let lista = null; let codigo = null;
+  const out = []; let lista = null; let codigo = null; let tabela = null;
+  const fecharTabela = () => { if (tabela) { out.push(`<table class="tv-tabela">${tabela.map((cs, i) => `<tr>${cs.map((c) => (i ? `<td>${linha(c)}</td>` : `<th>${linha(c)}</th>`)).join('')}</tr>`).join('')}</table>`); tabela = null; } };
   for (const l of t.split('\n')) {
+    if (!codigo && /^\s*\|.*\|\s*$/.test(l)) {
+      if (lista) { out.push(`</${lista}>`); lista = null; }
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(l)) continue; // linha separadora
+      (tabela ??= []).push(l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+      continue;
+    }
+    fecharTabela();
     if (l.startsWith('```')) { if (codigo) { out.push(`<pre>${esc(codigo.join('\n'))}</pre>`); codigo = null; } else codigo = []; continue; }
     if (codigo) { codigo.push(l); continue; }
     const m = l.match(/^\s*([-*]|\d+\.)\s+(.*)/);
@@ -1601,6 +1688,7 @@ function mdParaHtml(t) {
     else if (/^---+\s*$/.test(l)) out.push('<hr>');
     else if (l.trim()) out.push(`<p>${linha(l)}</p>`);
   }
+  fecharTabela();
   if (lista) out.push(`</${lista}>`);
   if (codigo) out.push(`<pre>${esc(codigo.join('\n'))}</pre>`);
   return out.join('');
@@ -2051,7 +2139,8 @@ function htmlFicha(p) {
     </dl>
     <div class="acoes">
       <button data-acao="conversar">🗣️ conversar</button>
-      ${p.mesa ? '<button class="neutro pequeno" data-acao="tela">🖥️ ver a tela</button>' : ''}
+      ${p.mesa ? '<button class="neutro pequeno" data-acao="tela">🖥️ ver o trabalho</button>' : ''}
+      ${entregas.has(p.id) ? '<button class="neutro pequeno" data-acao="entrega">📦 última entrega</button>' : ''}
       <button class="neutro pequeno" data-acao="elogiar">👏 elogiar</button>
       <button class="neutro pequeno" data-acao="bronca">😠 bronca</button>
       ${p.cargo !== 'chefe' ? `<button class="neutro pequeno" data-acao="ferias">${p.ferias ? '🏢 voltar das férias' : '🏖️ dar férias'}</button><button class="perigo pequeno" data-acao="demitir">desligar</button>` : ''}
@@ -2118,6 +2207,7 @@ function atualizarPainel() {
       try {
         if (a === 'conversar') { $('#janFicha').hidden = true; abrirDialogo(p); }
         if (a === 'tela') { $('#janFicha').hidden = true; abrirTelaDele(p); }
+        if (a === 'entrega') abrirEntrega(p.id);
         if (a === 'elogiar' || a === 'bronca') await api('POST', `/funcionarios/${p.id}/${a}`);
         if (a === 'ferias') await api('POST', `/funcionarios/${p.id}/ferias`, { ferias: !p.ferias });
         if (a === 'demitir' && await confirmar(`O trabalho continua guardado na branch mesa/${p.id}.`, { titulo: `Desligar ${p.nome}?`, sim: 'Desligar', perigo: true })) { await api('POST', `/funcionarios/${p.id}/demitir`); $('#janFicha').hidden = true; selecionado = null; }

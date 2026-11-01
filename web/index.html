@@ -296,6 +296,40 @@
   .pedido textarea { width: 100%; min-height: 54px; margin: 6px 0; font: 17px var(--pixel); }
   .tarefas-pc button { background: #2a3040; color: #dbe2f0; font-weight: 400; font-size: 13px; padding: 3px 10px; box-shadow: inset -2px -2px 0 #1a1f2a, inset 2px 2px 0 #3c4560; }
   .tarefas-pc button.ativa { background: #3c4a6a; }
+  .tela-trabalho { max-width: 1320px !important; width: 100%; height: min(92vh, 900px); display: flex; flex-direction: column; }
+  #telaTopo, #entTopo { font-size: 18px; color: var(--suave); margin: -4px 0 8px; }
+  #telaTopo b, #entTopo b { color: var(--texto, #f4f1ea); }
+  .tt-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .tt-chip { background: #2a3040; color: #dbe2f0; padding: 1px 8px; font-size: 15px; cursor: pointer; border: 2px solid #3c4560; }
+  .tt-chip:hover { border-color: #f2b84b; }
+  .tt-corpo { flex: 1; display: flex; gap: 10px; min-height: 0; }
+  .tt-visual { flex: 1; min-width: 0; background: #fff; color: #1d2230; border: 3px solid var(--tinta); display: flex; flex-direction: column; overflow: hidden; font: 14px system-ui, sans-serif; }
+  .tt-passos { width: 340px; flex: none; overflow: auto; background: #15121c; border: 3px solid var(--tinta); padding: 6px; }
+  .tt-passo { display: flex; gap: 8px; padding: 6px 8px; cursor: pointer; font-size: 17px; color: #dcd6e6; border-left: 3px solid transparent; }
+  .tt-passo:hover { background: #241f30; } .tt-passo.sel { background: #2f2740; border-left-color: #f2b84b; }
+  .tt-passo .q { color: #8a8398; font-size: 14px; margin-left: auto; white-space: nowrap; }
+  .tt-passo .st-ok { color: #6fd28a; } .tt-passo .st-erro { color: #ff8f86; }
+  .tt-tec { margin-top: 8px; } .tt-tec summary { cursor: pointer; color: var(--suave); }
+  .tt-tec #telaFunc { height: 26vh; }
+  .tv-cab { padding: 8px 12px; background: #eef0f5; border-bottom: 1px solid #d9dde6; font-size: 14px; }
+  .tv-cab span { color: #6a7286; }
+  .tv-pagina { flex: 1; border: 0; width: 100%; background: #fff; }
+  .tv-img { flex: 1; display: grid; place-items: center; background: repeating-conic-gradient(#f3f3f3 0% 25%, #fff 0% 50%) 0 0 / 20px 20px; overflow: auto; } .tv-img img { max-width: 100%; max-height: 100%; }
+  .tv-doc { flex: 1; overflow: auto; } .tv-doc.doc { max-width: none; padding: 24px 36px; }
+  .tv-novo { background: #fff3c4; outline: 4px solid #fff3c4; }
+  .tv-codigo { flex: 1; overflow: auto; font: 13px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; background: #1b1f29; color: #e6ebf5; padding: 6px 0; }
+  .tv-linha { display: flex; } .tv-linha .n { width: 48px; flex: none; text-align: right; padding-right: 12px; color: #5e667a; user-select: none; } .tv-linha .t { white-space: pre; }
+  .tv-linha.nova { background: #23402e; } .tv-linha.nova .n { color: #8fe0a8; }
+  .tv-terminal { flex: 1; overflow: auto; background: #0f0d14; color: #e6e1ee; font: 13px/1.5 ui-monospace, monospace; padding: 12px; }
+  .tv-terminal .tv-cmd { color: #f2b84b; margin-bottom: 8px; white-space: pre-wrap; } .tv-terminal pre { margin: 0; white-space: pre-wrap; }
+  .tv-ok { color: #1f8a46; font-weight: 600; } .tv-erro { color: #c0392b; font-weight: 600; } .tv-rodando { color: #b8860b; }
+  .tv-pesquisa { flex: 1; overflow: auto; padding: 12px; } .tv-res { padding: 8px 10px; border: 1px solid #e3e6ee; margin-bottom: 6px; display: flex; flex-direction: column; } .tv-res span { color: #1a7f37; font-size: 12px; word-break: break-all; }
+  .tv-tabela { border-collapse: collapse; margin: 12px; } .tv-tabela th, .tv-tabela td { border: 1px solid #d9dde6; padding: 4px 8px; text-align: left; } .tv-tabela th { background: #eef0f5; }
+  .tv-vazio { padding: 40px; color: #8a90a0; text-align: center; }
+  .ent-abas { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ent-abas button { font-size: 15px; padding: 3px 10px; } .ent-abas button.ativa { background: var(--destaque, #f2b84b); color: #1d1a24; }
+  .ent-visual { flex: 1; }
+  .toast.acao { pointer-events: auto; cursor: pointer; } .toast.acao:hover { filter: brightness(1.15); }
   #telaFunc { height: 62vh; overflow-y: auto; background: #0f1a14; color: #c9f2d6; border: 3px solid var(--tinta); padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
   #telaFunc .cmd { color: #f2b84b; } #telaFunc .err { color: #ff8f86; } #telaFunc .txt { color: #e6f2ea; } #telaFunc .sis { color: #7fa38c; }
   #fimDia .cartao { text-align: center; }
@@ -495,9 +529,20 @@
 </div>
 
 <div id="telaDele" class="sobre" hidden>
-  <div class="cartao largo px">
-    <div class="cabecalho"><h1 id="telaTitulo">Tela</h1><button class="neutro pequeno" id="telaSentar">sentar junto</button><button class="neutro pequeno" data-fechar>fechar</button></div>
-    <div id="telaFunc"></div>
+  <div class="cartao px tela-trabalho">
+    <div class="cabecalho"><h1 id="telaTitulo">Tela</h1><button class="neutro pequeno" id="telaAoVivo">● ao vivo</button><button class="neutro pequeno" id="telaSentar">sentar junto</button><button class="neutro pequeno" data-fechar>fechar</button></div>
+    <div id="telaTopo"></div>
+    <div class="tt-corpo"><div class="tt-visual" id="telaVisual"></div><div class="tt-passos" id="telaPassos"></div></div>
+    <details class="tt-tec"><summary>detalhes técnicos</summary><div id="telaFunc"></div></details>
+  </div>
+</div>
+
+<div id="janEntrega" class="sobre" hidden>
+  <div class="cartao px tela-trabalho">
+    <div class="cabecalho"><h1 id="entTitulo">📦 Entrega</h1><button class="neutro pequeno" id="entNavegador">abrir no navegador</button><button class="neutro pequeno" data-fechar>fechar</button></div>
+    <div id="entTopo"></div>
+    <div class="ent-abas" id="entAbas"></div>
+    <div class="tt-visual ent-visual" id="entVisual"></div>
   </div>
 </div>
 

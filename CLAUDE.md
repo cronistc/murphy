@@ -38,6 +38,9 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - Tempo: os fatos dizem data e hora de agora, quando o expediente abriu e quando cada coisa aconteceu em termos relativos ("hoje às…", "ontem…"); o chefe também recebe as entregas da equipe.
 - Balões: duram o tempo de ler, fila de 2 por pessoa, conversa à toa só se pouca gente fala; trabalho não vira balão.
 - Computador: barra de tarefas com Iniciar, bandeja (Compartilhados) e relógio; tela inicial personalizável (papel de parede, ordem por arrastar, atalhos para sites), guardada em `estado.computador`.
+- Conversa entre colegas: `falar_com_colega` (nas personas e nas tarefas) leva a fala à persona do outro (marcada [Colega]), com fatos e memória dele; os dois lembram; trava de ciclo (A esperando B e B chamando A).
+- `web/explorador.js`: o explorador de arquivos (lugares: projeto do computador, pasta pessoal, Drive, Lixeira). Copiar/mover entre lugares em `POST /arquivo/copiar|mover`; lixeira persistente (`<dados>/lixeira/indice.json`, `GET /lixeira`, esvaziar). Seleção sem redesenhar a lista (o duplo clique precisa do mesmo elemento).
+- `web/trabalho.js`: o trabalho visível. Eventos de uma sessão viram passos (📝 escreveu, ✏️ editou, 🧪 testes, 🔍 pesquisa…) e cada passo vira o visual do que foi feito (página em iframe da prévia, markdown formatado, imagem, código com as linhas novas destacadas, terminal com ✓/✗). A "tela" de quem trabalha e a janela de entrega (prévias dos arquivos mudados + relatório) usam isso.
 - `src/demo-equipe.ts`: três funcionários em paralelo, cada um na sua mesa, com verificação no git (é o teste de ponta a ponta da etapa 2).
 
 ## Experiência (não perder de vista)
