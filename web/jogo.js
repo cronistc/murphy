@@ -593,8 +593,8 @@ function encerrarDiaNaTela(ev, instantaneo) {
 
 async function encerrarDia() {
   if (faseDia !== 'aberto') return;
-  if (!confirm('Encerrar o expediente? Cada um salva o que estava fazendo e vai embora. Amanhã continuam de onde pararam.')) return;
-  try { await api('POST', '/expediente/encerrar'); } catch (e) { alert(e.message); }
+  if (!(await confirmar('Cada um salva o que estava fazendo e vai embora. Amanhã continuam de onde pararam.', { titulo: '🌙 Encerrar o expediente?', sim: 'Encerrar' }))) return;
+  try { await api('POST', '/expediente/encerrar'); } catch (e) { avisar(e.message); }
 }
 
 // ---------- eventos do cérebro ----------
@@ -944,7 +944,7 @@ function redimensionar() {
   tela.height = Math.round(H * escala * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-window.addEventListener('resize', () => { redimensionar(); posicionarNavegadorNativo(); });
+window.addEventListener('resize', redimensionar);
 
 function quebrar(texto, max) {
   const linhas = [''];
@@ -1062,12 +1062,44 @@ function notificar(texto) {
   setTimeout(() => t.remove(), 6000);
 }
 
+// ---------- perguntas e avisos (janelas do jogo, nunca as do sistema) ----------
+let fecharPergunta = null;
+function perguntar({ titulo = '', texto = '', campo = null, valor = '', sim = 'OK', nao = 'Cancelar', perigo = false } = {}) {
+  fecharPergunta?.(campo === null ? false : null);
+  return new Promise((resolve) => {
+    const m = $('#pergunta');
+    const inp = $('#perguntaCampo');
+    $('#perguntaTitulo').textContent = titulo;
+    $('#perguntaTexto').textContent = texto;
+    inp.hidden = campo === null;
+    inp.placeholder = campo ?? '';
+    inp.value = valor;
+    $('#perguntaSim').textContent = sim;
+    $('#perguntaSim').className = perigo ? 'perigo' : '';
+    $('#perguntaNao').hidden = nao === null;
+    $('#perguntaNao').textContent = nao ?? '';
+    m.hidden = false;
+    setTimeout(() => { if (campo !== null) { inp.focus(); inp.select(); } else $('#perguntaSim').focus(); }, 20);
+    fecharPergunta = (v) => { m.hidden = true; fecharPergunta = null; resolve(v); };
+  });
+}
+$('#formPergunta').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!fecharPergunta) return;
+  if ($('#perguntaCampo').hidden) fecharPergunta(true);
+  else fecharPergunta($('#perguntaCampo').value.trim() || null);
+});
+$('#perguntaNao').addEventListener('click', () => fecharPergunta?.($('#perguntaCampo').hidden ? false : null));
+const confirmar = (texto, o = {}) => perguntar({ titulo: o.titulo ?? 'Tem certeza?', texto, sim: o.sim ?? 'Sim', nao: o.nao ?? 'Cancelar', perigo: o.perigo });
+const avisar = (texto, titulo = 'Ops') => perguntar({ titulo, texto, nao: null });
+
 // ---------- teclado e mouse ----------
 const modalAberto = () => [...document.querySelectorAll('.sobre')].some((m) => !m.hidden);
 const digitando = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || Boolean(document.activeElement?.closest?.('.xterm'));
 window.addEventListener('keydown', (e) => {
   if (e.key === 'F11') { e.preventDefault(); return telaCheia(); }
   if (e.key === 'Escape') {
+    if (fecharPergunta) return fecharPergunta($('#perguntaCampo').hidden ? false : null);
     if (modalAberto()) return fecharModais();
     if (dialogoCom) return fecharDialogo();
     if (!$('#abertura').hidden || !$('#boasvindas').hidden) return;
@@ -1128,16 +1160,28 @@ $('#pedidos').addEventListener('click', async (e) => {
   try {
     if (b.dataset.tipo === 'contratacao') await api('POST', `/contratacoes/${b.dataset.id}`, { aprovar });
     else await api('POST', `/permissoes/${b.dataset.id}`, { aprovar });
-  } catch (err) { b.disabled = false; alert(err.message); }
+  } catch (err) { b.disabled = false; avisar(err.message); }
 });
 $('#fAuto').addEventListener('change', async (e) => { try { await api('POST', '/config', { aprovarTudo: e.target.checked }); } catch { e.target.checked = !e.target.checked; } });
-$('#btnPasta').addEventListener('click', () => api('POST', '/abrir-pasta', { alvo: 'principal' }).catch((e) => alert(e.message)));
+$('#btnPasta').addEventListener('click', () => { $('#menu').hidden = true; abrirComputador('principal', 'Projeto principal (versão entregue)'); mostrarApp('arquivos'); listarArquivos(''); });
+$('#btnNavegadorMenu').addEventListener('click', () => { $('#menu').hidden = true; abrirNoJogo(navHist.lista[navHist.pos] ?? '/previa/principal/'); });
+$('#btnJornalMenu').addEventListener('click', () => { $('#menu').hidden = true; abrirJornal(); });
+$('#btnRecomecar').addEventListener('click', async () => {
+  $('#menu').hidden = true;
+  const ok = await confirmar('O escritório atual, a equipe, as conversas e o diário são guardados num canto (nada é apagado, os projetos continuam na pasta deles) e o jogo começa de novo: apresentação, conta, criar o escritório.', { titulo: '🔄 Recomeçar do zero?', sim: 'Recomeçar', perigo: true });
+  if (!ok) return;
+  try { await api('POST', '/recomecar'); } catch {}
+  document.body.insertAdjacentHTML('beforeend', '<div class="sobre" style="z-index:50"><div class="cartao px"><h1>🔄 Recomeçando…</h1><p>Guardando o escritório antigo e preparando um novo.</p></div></div>');
+  const esperar = async () => { try { const r = await fetch('/estado'); if (r.ok) return location.reload(); } catch {} setTimeout(esperar, 700); };
+  setTimeout(esperar, 1500);
+});
 
 // ---------- janelas ----------
 function fecharModais() {
   for (const m of document.querySelectorAll('.sobre')) {
-    if (['boasvindas', 'fimDia', 'abertura'].includes(m.id)) continue;
+    if (['boasvindas', 'fimDia', 'abertura', 'pergunta'].includes(m.id)) continue;
     if (m.id === 'computador' && !m.hidden) fecharComputador();
+    if (m.id === 'janNavegador' && !m.hidden) fecharNavegadorNativo();
     m.hidden = true;
   }
   telaAbertaDe = null;
@@ -1166,8 +1210,8 @@ async function cliqueHistorico(e, recarregar) {
     pre.hidden = false;
     try { pre.textContent = (await api('GET', `/cofre/${ver.dataset.ver}`)).detalhe; } catch (err) { pre.textContent = err.message; }
   }
-  if (desf && confirm('Desfazer esta entrega? A versão principal volta ao que era antes dela.')) {
-    try { await api('POST', `/cofre/${desf.dataset.desfazer}/desfazer`); recarregar(); } catch (err) { alert(err.message); }
+  if (desf && await confirmar('A versão principal volta ao que era antes dela (dá para desfazer o desfazer).', { titulo: 'Desfazer esta entrega?', sim: 'Desfazer' })) {
+    try { await api('POST', `/cofre/${desf.dataset.desfazer}/desfazer`); recarregar(); } catch (err) { avisar(err.message); }
   }
 }
 async function abrirCofre() {
@@ -1179,12 +1223,14 @@ async function abrirCofre() {
 }
 $('#janCorpo').addEventListener('click', async (e) => {
   if (e.target.closest('[data-ver],[data-desfazer]')) return cliqueHistorico(e, abrirCofre);
+  const noticia = e.target.closest('[data-noticia]');
+  if (noticia) { $('#janela').hidden = true; return abrirNoJogo(noticia.dataset.noticia); }
   const jornal = e.target.closest('#btnAtualizarJornal');
   if (jornal) { jornal.disabled = true; await api('POST', '/agenda/gerar').catch(() => {}); jornal.textContent = 'Pedido! O jornal chega em um ou dois minutos.'; }
 });
 $('#janCorpo').addEventListener('change', async (e) => {
-  if (e.target.id === 'wifiInternet') await api('POST', '/config', { internet: e.target.checked }).catch((err) => alert(err.message));
-  if (e.target.id === 'wifiAuto') await api('POST', '/config', { aprovarTudo: e.target.checked }).catch((err) => alert(err.message));
+  if (e.target.id === 'wifiInternet') await api('POST', '/config', { internet: e.target.checked }).catch((err) => avisar(err.message));
+  if (e.target.id === 'wifiAuto') await api('POST', '/config', { aprovarTudo: e.target.checked }).catch((err) => avisar(err.message));
 });
 $('#janCorpo').addEventListener('submit', async (e) => {
   if (e.target.id !== 'formVoz') return;
@@ -1216,7 +1262,7 @@ function abrirAr() {
 function abrirJornal() {
   const j = agenda?.jornal ?? [];
   janela('📺 Jornal do escritório', `${j.length ? `<p>Notícias reais de hoje, buscadas de manhã. A equipe comenta no bebedouro.</p>
-    <div class="lista">${j.map((n) => `<div class="item"><b>${esc(n.titulo)}</b><div class="sub">${esc(n.fonte)}</div><div>${esc(n.resumo)}</div>${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">ler na fonte</a>` : ''}</div>`).join('')}</div>`
+    <div class="lista">${j.map((n) => `<div class="item"><b>${esc(n.titulo)}</b><div class="sub">${esc(n.fonte)}</div><div>${esc(n.resumo)}</div>${n.url ? `<button class="neutro pequeno" data-noticia="${esc(n.url)}" style="margin-top:6px">ler a notícia</button>` : ''}</div>`).join('')}</div>`
     : `<p>${internet ? 'O jornal de hoje ainda não chegou.' : 'A internet do escritório está desligada.'}</p>`}
     <button class="neutro" id="btnAtualizarJornal" style="margin-top:10px">Buscar o jornal agora</button>`);
 }
@@ -1252,6 +1298,7 @@ function abrirAjuda() {
       <div class="item">💻 <b>Computadores:</b> sente numa mesa para usar um computador de verdade (navegador, arquivos, editor, terminal, ver o projeto). Na mesa de quem está trabalhando, você vê a tela da pessoa.</div>
       <div class="item">📋 <b>Pedidos:</b> permissões e contratações aparecem no painel, e a pessoa vem até a sua mesa.</div>
       <div class="item">🗄️ Cofre: histórico e desfazer · 📶 Roteador: internet · ❄️ Ar: carga do PC · 📺 TV: jornal real · 📒 Estante: relatório e diário.</div>
+      <div class="item">☰ <b>Menu (M):</b> arquivos do projeto, navegador, jornal, Wi-Fi, encerrar o dia e recomeçar do zero. Tudo abre aqui dentro do jogo.</div>
     </div>
     <h2 style="margin-top:14px">O que cada cena quer dizer</h2>
     <div class="lista">
@@ -1262,16 +1309,8 @@ function abrirAjuda() {
     </div>`);
 }
 $('#btnAjuda').addEventListener('click', () => { $('#menu').hidden = true; abrirAjuda(); });
-$('#btnVozes').addEventListener('click', () => { $('#menu').hidden = true; abrirVozes(); });
 $('#btnEncerrar').addEventListener('click', () => { $('#menu').hidden = true; encerrarDia(); });
-$('#btnSom').addEventListener('click', () => {
-  if (!vozConfigurada) return abrirVozes();
-  somLigado = !somLigado;
-  guardar('som', somLigado ? 'sim' : 'nao');
-  if (!somLigado) audioAtual?.pause();
-  atualizarVivos();
-});
-$('#btnReabrir').addEventListener('click', async () => { $('#fimDia').hidden = true; await api('POST', '/expediente/abrir').catch((e) => alert(e.message)); });
+$('#btnReabrir').addEventListener('click', async () => { $('#fimDia').hidden = true; await api('POST', '/expediente/abrir').catch((e) => avisar(e.message)); });
 
 // ---------- a tela de um funcionário ----------
 function abrirTelaDele(p) {
@@ -1345,8 +1384,7 @@ function mostrarApp(app) {
   const nomes = { navegador: '🌐 Navegador', arquivos: '📁 Arquivos', editor: '📝 Editor', terminal: '⌨️ Terminal', historico: '🗄️ Histórico' };
   $('#tarefasPc').innerHTML = `<button data-ir="area" class="${app ? '' : 'ativa'}">🖥️ Área de trabalho</button>` +
     [...appsAbertos].map((a) => `<button data-ir="${a}" class="${a === app ? 'ativa' : ''}">${nomes[a]}</button>`).join('');
-  if (app === 'navegador') posicionarNavegadorNativo();
-  else fecharNavegadorNativo(true);
+  if (app === 'navegador') colocarNavegador($('#slotNavPc'));
   if (app === 'terminal') abrirTerminal();
 }
 $('#tarefasPc').addEventListener('click', (e) => { const b = e.target.closest('[data-ir]'); if (b) mostrarApp(b.dataset.ir === 'area' ? null : b.dataset.ir); });
@@ -1366,36 +1404,93 @@ $('#icones').addEventListener('click', async (e) => {
   if (app === 'navegador' && navHist.pos < 0) navegar(`/previa/${alvoPc}/`);
 });
 
-// Navegador: o site do projeto abre aqui dentro; sites de fora abrem num
-// navegador de verdade (no app instalado, por cima desta janela).
+// Navegador do jogo: um só, que vai para onde for preciso (computador, janela
+// do navegador, login). O site do projeto abre aqui dentro; sites de fora abrem
+// num navegador de verdade embutido no app (por cima desta área). Nada abre
+// fora do jogo.
+let navUrlAtual = '';
+function colocarNavegador(slot) {
+  if ($('#navegador').parentElement === slot) return;
+  slot.append($('#navegador'));
+  // mover um iframe recarrega: volta para a página em que estava
+  const f = $('#navArea iframe');
+  if (f && navUrlAtual) f.src = navUrlAtual;
+}
+function abrirNoJogo(url) {
+  if (!$('#computador').hidden) { mostrarApp('navegador'); return navegar(url); }
+  colocarNavegador($('#slotNavJanela'));
+  $('#janNavegador').hidden = false;
+  navegar(url);
+}
+// A janela do app manda para cá qualquer link que tentaria abrir fora.
+window.__abrirNoJogo = (url) => abrirNoJogo(url);
+// Links de fora em qualquer tela do jogo também abrem aqui dentro.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a[href]');
+  if (!a || a.closest('#navArea')) return;
+  const href = a.getAttribute('href');
+  if (!/^https?:\/\//i.test(href) || new URL(href).origin === location.origin) return;
+  e.preventDefault();
+  abrirNoJogo(href);
+}, true);
+
 function normalizarEndereco(t) {
   t = t.trim();
   if (!t) return null;
   if (t.startsWith('/')) return t;
   if (/^https?:\/\//i.test(t)) return t;
-  if (/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(t) || t.startsWith('localhost')) return `https://${t}`;
-  return `https://duckduckgo.com/?q=${encodeURIComponent(t)}`;
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/.test(t) || t.startsWith('localhost')) return `https://${t}`;
+  return `https://duckduckgo.com/html/?q=${encodeURIComponent(t)}`;
 }
 function navegar(endereco, registrar = true) {
   const url = normalizarEndereco(endereco);
   if (!url) return;
+  navUrlAtual = url;
   $('#navEndereco').value = url;
   if (registrar) { navHist.lista = navHist.lista.slice(0, navHist.pos + 1); navHist.lista.push(url); navHist.pos = navHist.lista.length - 1; }
-  const local = url.startsWith('/');
+  const local = url.startsWith('/') || url.startsWith(location.origin);
   $('#navAviso').hidden = true;
   if (!local && navNativo) {
     $('#navArea').innerHTML = '';
-    return abrirNavegadorNativo(url);
+    navAtivoNativo = true;
+    navUltimo = '';
+    window.webkit.messageHandlers.navegador.postMessage({ acao: 'abrir', url, ...retanguloNav() });
+    return;
   }
-  fecharNavegadorNativo(true);
-  $('#navArea').innerHTML = `<iframe src="${esc(url)}" title="página" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals allow-downloads"></iframe>`;
-  if (!local) {
-    $('#navAviso').hidden = false;
-    $('#navAviso').innerHTML = `Alguns sites não deixam abrir dentro de outra página. <a href="${esc(url)}" target="_blank" rel="noopener">Abrir no navegador do sistema</a>.`;
-  }
+  fecharNavegadorNativo();
+  // Sem o navegador embutido (rodando fora do app), sites de fora aparecem em modo leitura.
+  if (!local) return mostrarLeitura(url);
+  $('#navArea').innerHTML = `<iframe src="${esc(url)}" title="página" sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-downloads"></iframe>`;
   const f = $('#navArea iframe');
-  f.addEventListener('load', () => { try { if (f.contentWindow.location.pathname) $('#navEndereco').value = f.contentWindow.location.pathname; } catch {} });
+  f.addEventListener('load', () => {
+    try {
+      const doc = f.contentDocument;
+      if (f.contentWindow.location.pathname) $('#navEndereco').value = f.contentWindow.location.pathname;
+      // links da página (inclusive os que abririam outra janela) continuam aqui dentro
+      doc.addEventListener('click', (ev) => {
+        const a = ev.target.closest?.('a[href]');
+        if (!a || a.getAttribute('href').startsWith('#')) return;
+        if (a.target === '_blank' || a.origin !== location.origin) { ev.preventDefault(); navegar(a.href); }
+      }, true);
+    } catch {}
+  });
 }
+async function mostrarLeitura(url) {
+  fecharNavegadorNativo();
+  navUrlAtual = url;
+  $('#navArea').innerHTML = '<div class="leitura">Carregando a página…</div>';
+  try {
+    const r = await api('GET', `/leitura?url=${encodeURIComponent(url)}`);
+    if (navUrlAtual !== url) return;
+    const tag = { h1: 'h2', h2: 'h2', h3: 'h3', h4: 'h3', pre: 'pre', blockquote: 'blockquote' };
+    $('#navArea').innerHTML = `<div class="leitura"><div class="fonte">📄 modo leitura · ${esc(r.url)}</div>${r.titulo ? `<h1>${esc(r.titulo)}</h1>` : ''}${r.blocos.map((b) =>
+      b.t === 'a' ? `<a data-href="${esc(b.href)}">${esc(b.texto)}</a>` : b.t === 'li' ? `<p>• ${esc(b.texto)}</p>` : `<${tag[b.t] ?? 'p'}>${esc(b.texto)}</${tag[b.t] ?? 'p'}>`).join('') || '<p>A página não tem texto para mostrar.</p>'}</div>`;
+  } catch (e) {
+    if (navUrlAtual === url) $('#navArea').innerHTML = `<div class="leitura"><h2>Não consegui abrir a página</h2><p>${esc(e.message)}</p></div>`;
+  }
+}
+$('#navArea').addEventListener('click', (e) => { const a = e.target.closest('a[data-href]'); if (a) navegar(a.dataset.href); });
+$('#navLeitura').addEventListener('click', () => { const u = normalizarEndereco($('#navEndereco').value); if (u && !u.startsWith('/')) mostrarLeitura(u); });
 $('#navIr').addEventListener('click', () => navegar($('#navEndereco').value));
 $('#navEndereco').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); navegar($('#navEndereco').value); } });
 $('#navVoltar').addEventListener('click', () => {
@@ -1409,29 +1504,45 @@ $('#navAvancar').addEventListener('click', () => {
 $('#navRecarregar').addEventListener('click', () => {
   if (navAtivoNativo) return window.webkit.messageHandlers.navegador.postMessage({ acao: 'recarregar' });
   const f = $('#navArea iframe');
-  if (f) f.src = f.src;
+  if (f) f.src = f.src; else if (navUrlAtual) navegar(navUrlAtual, false);
 });
 
+// O navegador embutido fica por cima da área #navArea: acompanha a posição dela
+// e some quando algo do jogo a cobre (diálogo, janela, pergunta) ou quando ela some.
 let navAtivoNativo = false;
+let navUltimo = '';
 function retanguloNav() {
   const r = $('#navArea').getBoundingClientRect();
   return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
 }
-function abrirNavegadorNativo(url) {
-  navAtivoNativo = true;
-  window.webkit.messageHandlers.navegador.postMessage({ acao: 'abrir', url, ...retanguloNav() });
+function navVisivel() {
+  const area = $('#navArea');
+  if (!area.isConnected) return false;
+  const b = area.getBoundingClientRect();
+  if (b.width < 40 || b.height < 40) return false;
+  return [[0.5, 0.5], [0.04, 0.04], [0.96, 0.04], [0.04, 0.96], [0.96, 0.96]].every(([fx, fy]) => {
+    const el = document.elementFromPoint(b.left + b.width * fx, b.top + b.height * fy);
+    return el && area.contains(el);
+  });
 }
-function posicionarNavegadorNativo() {
-  if (navAtivoNativo && appAtivo === 'navegador' && !$('#computador').hidden) window.webkit.messageHandlers.navegador.postMessage({ acao: 'mover', ...retanguloNav() });
-}
-function fecharNavegadorNativo(soEsconder = false) {
+function sincronizarNav() {
   if (!navNativo || !navAtivoNativo) return;
-  window.webkit.messageHandlers.navegador.postMessage({ acao: soEsconder ? 'esconder' : 'fechar' });
-  if (!soEsconder) navAtivoNativo = false;
+  const r = navVisivel() ? retanguloNav() : null;
+  const chave = r ? `${r.x},${r.y},${r.w},${r.h}` : 'oculto';
+  if (chave === navUltimo) return;
+  navUltimo = chave;
+  window.webkit.messageHandlers.navegador.postMessage(r ? { acao: 'mover', ...r } : { acao: 'esconder' });
 }
-// O app nativo avisa quando a página muda (endereço e título).
+setInterval(sincronizarNav, 150);
+function fecharNavegadorNativo() {
+  if (!navNativo || !navAtivoNativo) return;
+  window.webkit.messageHandlers.navegador.postMessage({ acao: 'fechar' });
+  navAtivoNativo = false;
+  navUltimo = '';
+}
+// O app avisa quando a página do navegador embutido muda.
 window.__navegadorNativo = (dados) => {
-  if (dados.url) $('#navEndereco').value = dados.url;
+  if (dados.url) { $('#navEndereco').value = dados.url; navUrlAtual = dados.url; }
 };
 
 // Arquivos
@@ -1440,28 +1551,55 @@ async function listarArquivos(caminho) {
     const r = await api('GET', `/arquivos?alvo=${alvoPc}&caminho=${encodeURIComponent(caminho)}`);
     arqCaminho = r.caminho;
     $('#arqCaminho').textContent = `/${r.caminho}`;
-    $('#arqLista').innerHTML = r.itens.map((i) => `<tr data-nome="${esc(i.nome)}" data-pasta="${i.pasta ? 1 : 0}"><td>${i.pasta ? '📁' : '📄'} ${esc(i.nome)}</td><td style="color:#7a8296;width:120px">${i.pasta ? '' : `${(i.tamanho / 1024).toFixed(1)} KB`}</td><td style="color:#7a8296;width:160px">${new Date(i.modificado).toLocaleString('pt-BR')}</td></tr>`).join('')
-      || '<tr><td style="color:#7a8296">Pasta vazia.</td></tr>';
+    $('#arqLista').innerHTML = r.itens.map((i) => `<tr data-nome="${esc(i.nome)}" data-pasta="${i.pasta ? 1 : 0}"><td>${i.pasta ? '📁' : '📄'} ${esc(i.nome)}</td><td style="color:#7a8296;width:120px">${i.pasta ? '' : `${(i.tamanho / 1024).toFixed(1)} KB`}</td><td style="color:#7a8296;width:160px">${new Date(i.modificado).toLocaleString('pt-BR')}</td><td class="acoes"><button data-renomear title="Renomear">✏️</button><button data-apagar title="Apagar">🗑️</button></td></tr>`).join('')
+      || '<tr><td style="color:#7a8296">Pasta vazia. Crie um arquivo ou uma pasta nos botões acima.</td></tr>';
   } catch (e) { $('#pcErro').textContent = e.message; }
 }
-$('#arqLista').addEventListener('click', (e) => {
+$('#arqLista').addEventListener('click', async (e) => {
   const tr = e.target.closest('tr[data-nome]');
   if (!tr) return;
   const alvo = arqCaminho ? `${arqCaminho}/${tr.dataset.nome}` : tr.dataset.nome;
+  if (e.target.closest('[data-renomear]')) {
+    const novo = await perguntar({ titulo: '✏️ Renomear', texto: `Novo nome para "${tr.dataset.nome}":`, campo: 'nome', valor: tr.dataset.nome, sim: 'Renomear' });
+    if (!novo || novo === tr.dataset.nome) return;
+    try { await api('POST', '/arquivo/renomear', { alvo: alvoPc, de: alvo, para: arqCaminho ? `${arqCaminho}/${novo}` : novo }); listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
+    return;
+  }
+  if (e.target.closest('[data-apagar]')) {
+    const pasta = tr.dataset.pasta === '1';
+    if (!(await confirmar(`${pasta ? 'A pasta e tudo o que tem dentro vão' : 'O arquivo vai'} para a lixeira do escritório. Dá para desfazer.`, { titulo: `🗑️ Apagar "${tr.dataset.nome}"?`, sim: 'Apagar', perigo: true }))) return;
+    try {
+      const r = await api('POST', '/arquivo/apagar', { alvo: alvoPc, caminho: alvo });
+      listarArquivos(arqCaminho);
+      if (edArquivo === alvo) { edArquivo = null; edSujo = false; $('#editorTexto').value = ''; $('#edTitulo').textContent = '📝 Editor'; }
+      $('#pcErro').innerHTML = `<span style="color:#cfd6e4">🗑️ "${esc(tr.dataset.nome)}" foi para a lixeira.</span> <button class="neutro pequeno" data-restaurar="${r.id}">desfazer</button>`;
+    } catch (err) { avisar(err.message); }
+    return;
+  }
   if (tr.dataset.pasta === '1') listarArquivos(alvo);
   else abrirNoEditor(alvo);
 });
 $('#arqSubir').addEventListener('click', () => listarArquivos(arqCaminho.split('/').slice(0, -1).join('/')));
-$('#arqNovo').addEventListener('click', () => {
-  const nome = prompt('Nome do novo arquivo (ex.: notas.md)');
+$('#arqNovo').addEventListener('click', async () => {
+  const nome = await perguntar({ titulo: '📄 Novo arquivo', texto: 'Nome do arquivo (ex.: notas.md, index.html):', campo: 'nome do arquivo', sim: 'Criar' });
   if (!nome) return;
   const caminho = arqCaminho ? `${arqCaminho}/${nome}` : nome;
-  api('PUT', '/arquivo', { alvo: alvoPc, caminho, conteudo: '' }).then(() => { listarArquivos(arqCaminho); abrirNoEditor(caminho); }).catch((err) => ($('#pcErro').textContent = err.message));
+  try { await api('POST', '/arquivo/novo', { alvo: alvoPc, caminho }); listarArquivos(arqCaminho); abrirNoEditor(caminho); } catch (err) { avisar(err.message); }
+});
+$('#arqNovaPasta').addEventListener('click', async () => {
+  const nome = await perguntar({ titulo: '📁 Nova pasta', texto: 'Nome da pasta:', campo: 'nome da pasta', sim: 'Criar' });
+  if (!nome) return;
+  try { await api('POST', '/pasta', { alvo: alvoPc, caminho: arqCaminho ? `${arqCaminho}/${nome}` : nome }); listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
+});
+$('#pcErro').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-restaurar]');
+  if (!b) return;
+  try { await api('POST', '/arquivo/restaurar', { id: b.dataset.restaurar }); $('#pcErro').innerHTML = '<span style="color:#cfd6e4">↩️ Restaurado.</span>'; listarArquivos(arqCaminho); } catch (err) { avisar(err.message); }
 });
 
 // Editor
 async function abrirNoEditor(caminho) {
-  if (edSujo && !confirm('Há alterações não salvas no editor. Descartar?')) return;
+  if (edSujo && !(await confirmar('Há alterações não salvas no editor.', { titulo: 'Descartar alterações?', sim: 'Descartar' }))) return;
   try {
     const r = await api('GET', `/arquivo?alvo=${alvoPc}&caminho=${encodeURIComponent(caminho)}`);
     mostrarApp('editor');
@@ -1662,8 +1800,6 @@ function atualizarVivos() {
   }
   $('#almoco').hidden = !almocoAte;
   if (almocoAte) $('#almoco').textContent = `🍽️ almoço até ${horaCurta(almocoAte)}`;
-  $('#btnSom').hidden = !vozConfigurada;
-  $('#btnSom').textContent = somLigado ? '🔊 vozes ligadas' : '🔇 vozes desligadas';
   for (const el of document.querySelectorAll('.membro .det[data-id]')) {
     const p = personagens.get(el.dataset.id);
     if (p) el.textContent = `${tituloDe(p)} · ${statusDe(p)}`;
@@ -1748,8 +1884,8 @@ function atualizarPainel() {
         if (a === 'tela') { $('#janFicha').hidden = true; abrirTelaDele(p); }
         if (a === 'elogiar' || a === 'bronca') await api('POST', `/funcionarios/${p.id}/${a}`);
         if (a === 'ferias') await api('POST', `/funcionarios/${p.id}/ferias`, { ferias: !p.ferias });
-        if (a === 'demitir' && confirm(`Desligar ${p.nome}? O trabalho continua guardado na branch mesa/${p.id}.`)) { await api('POST', `/funcionarios/${p.id}/demitir`); $('#janFicha').hidden = true; selecionado = null; }
-      } catch (err) { alert(err.message); }
+        if (a === 'demitir' && await confirmar(`O trabalho continua guardado na branch mesa/${p.id}.`, { titulo: `Desligar ${p.nome}?`, sim: 'Desligar', perigo: true })) { await api('POST', `/funcionarios/${p.id}/demitir`); $('#janFicha').hidden = true; selecionado = null; }
+      } catch (err) { avisar(err.message); }
     };
     $('#formDireta')?.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1831,16 +1967,34 @@ $('#bvContinuar').addEventListener('click', irParaEscritorio);
 $('#bvOutra').addEventListener('click', () => entrar());
 $('#btnEntrar').addEventListener('click', () => entrar());
 let esperandoLogin = null;
+let urlLoginCodigo = null;
+$('#loginVoltar').addEventListener('click', async () => {
+  clearInterval(esperandoLogin);
+  await api('POST', '/conta/cancelar').catch(() => {});
+  fecharNavegadorNativo();
+  $('#boasvindas .cartao').classList.remove('com-login');
+  colocarNavegador($('#slotNavPc'));
+  verificarConta().catch((e) => ($('#loginErro').textContent = e.message));
+});
+$('#loginComCodigo').addEventListener('click', () => {
+  $('#formCodigo').hidden = false;
+  if (urlLoginCodigo) navegar(urlLoginCodigo);
+  $('#fCodigo').focus();
+});
 async function entrar() {
   $('#loginErro').textContent = '';
   try {
     const r = await api('POST', '/conta/entrar');
     if (!r.url) throw new Error(r.saida?.trim() || 'o Claude Code não respondeu');
-    $('#loginLink').href = r.url;
+    urlLoginCodigo = r.urlCodigo ?? r.url;
     passo('bvCodigo');
-    $('#fCodigo').focus();
+    $('#formCodigo').hidden = true;
+    $('#boasvindas .cartao').classList.add('com-login');
+    colocarNavegador($('#slotNavLogin'));
+    navegar(r.url);
     clearInterval(esperandoLogin);
-    esperandoLogin = setInterval(async () => { const c = await api('GET', '/conta').catch(() => ({})); if (c.logado) loginConcluido(); }, 3000);
+    // pronto quando o login em andamento termina com a conta logada
+    esperandoLogin = setInterval(async () => { const c = await api('GET', '/conta').catch(() => ({})); if (c.logado && !c.loginEmAndamento) loginConcluido(); }, 2000);
   } catch (err) { $('#loginErro').textContent = err.message; }
 }
 $('#formCodigo').addEventListener('submit', async (e) => {
@@ -1856,6 +2010,9 @@ $('#formCodigo').addEventListener('submit', async (e) => {
 });
 function loginConcluido() {
   clearInterval(esperandoLogin);
+  fecharNavegadorNativo();
+  $('#boasvindas .cartao').classList.remove('com-login');
+  colocarNavegador($('#slotNavPc'));
   if (projeto) $('#boasvindas').hidden = true;
   else irParaEscritorio();
 }
@@ -1895,7 +2052,7 @@ function aplicarEstado(estado) {
   equipeInfo = estado.equipe ?? [];
   internet = estado.internet ?? true;
   aprovarTudo = Boolean(estado.aprovarTudo);
-  vozConfigurada = Boolean(estado.vozConfigurada);
+  vozConfigurada = false; // vozes deixadas de lado por enquanto
   $('#fAuto').checked = aprovarTudo;
   agenda = estado.agenda ?? agenda;
   almocoAte = estado.almocoAte ?? null;

@@ -1,14 +1,16 @@
 // Login do usuário na conta Claude, sem terminal.
 // Usa o mesmo executável do Claude Code que o Agent SDK traz embutido, então o
 // login vale para os funcionários. O fluxo é o oficial (`claude auth login`):
-// ele abre o navegador sozinho e, se o site mostrar um código, o usuário cola
-// o código na tela do escritório.
+// ele tentaria abrir o navegador do sistema, mas aqui o `xdg-open` que ele acha
+// é um do próprio escritório, que só anota o endereço: o login abre no
+// navegador de dentro do jogo. Se o site mostrar um código, o usuário cola na tela.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { ambienteLimpo } from './sessao.ts';
+import { PASTA_DADOS } from './estado.ts';
 
 export type StatusConta = { logado: boolean; metodo?: string; email?: string; erro?: string };
 
@@ -46,7 +48,7 @@ export async function status(): Promise<StatusConta> {
   }
 }
 
-type Login = { processo: ChildProcess; saida: string; url?: string; concluido: boolean; codigoSaida?: number | null };
+type Login = { processo: ChildProcess; saida: string; url?: string; urlAutomatica?: string; concluido: boolean; codigoSaida?: number | null };
 let login: Login | null = null;
 
 const semCores = (s: string) =>
@@ -54,12 +56,28 @@ const semCores = (s: string) =>
 
 // Inicia `claude auth login`. Roda dentro de `script` para ter um terminal
 // (pty): o CLI só pede o código quando está num terminal.
-export async function iniciarLogin(): Promise<{ url?: string; saida: string }> {
-  if (login && !login.concluido) return { url: login.url, saida: semCores(login.saida) };
+// Os programas que o CLI usaria para abrir o navegador do sistema, trocados
+// por um que só anota o endereço.
+function navegadorDoJogo() {
+  const pasta = path.join(PASTA_DADOS, 'navegador-do-jogo');
+  const anotacoes = path.join(pasta, 'enderecos.txt');
+  fs.mkdirSync(pasta, { recursive: true });
+  const script = '#!/bin/sh\nfor a in "$@"; do case "$a" in http*) printf \'%s\\n\' "$a" >> "$ESCRITORIO_ENDERECOS";; esac; done\nexit 0\n';
+  for (const nome of ['xdg-open', 'gio', 'sensible-browser', 'x-www-browser', 'www-browser', 'gnome-open', 'kde-open', 'kde-open5', 'wslview']) {
+    fs.writeFileSync(path.join(pasta, nome), script, { mode: 0o755 });
+  }
+  fs.rmSync(anotacoes, { force: true });
+  return { pasta, anotacoes };
+}
+
+export async function iniciarLogin(): Promise<{ url?: string; urlCodigo?: string; saida: string }> {
+  if (login && !login.concluido) return { url: login.urlAutomatica ?? login.url, urlCodigo: login.url, saida: semCores(login.saida) };
   const bin = executavelClaude();
   const comando = `'${bin.replace(/'/g, `'\\''`)}' auth login --claudeai`;
+  const nav = navegadorDoJogo();
+  const base = ambienteLimpo();
   const processo = spawn('script', ['-qfc', comando, '/dev/null'], {
-    env: { ...ambienteLimpo(), TERM: 'xterm-256color', COLUMNS: '400' },
+    env: { ...base, TERM: 'xterm-256color', COLUMNS: '400', PATH: `${nav.pasta}:${base.PATH ?? process.env.PATH ?? '/usr/bin:/bin'}`, BROWSER: path.join(nav.pasta, 'xdg-open'), ESCRITORIO_ENDERECOS: nav.anotacoes },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const atual: Login = { processo, saida: '', concluido: false };
@@ -79,8 +97,17 @@ export async function iniciarLogin(): Promise<{ url?: string; saida: string }> {
     atual.codigoSaida = codigo;
   });
   // Espera o link aparecer (ou o processo terminar).
-  for (let i = 0; i < 100 && !atual.url && !atual.concluido; i++) await new Promise((r) => setTimeout(r, 100));
-  return { url: atual.url, saida: semCores(atual.saida) };
+  // O endereço "automático" (volta sozinho para o CLI, sem código) é o que ele
+  // manda abrir; o impresso na tela pede o código.
+  const lerAnotado = () => {
+    try { atual.urlAutomatica ??= fs.readFileSync(nav.anotacoes, 'utf8').split('\n').find((l) => l.startsWith('https://')); } catch {}
+  };
+  for (let i = 0; i < 100 && !(atual.url && atual.urlAutomatica) && !atual.concluido; i++) {
+    lerAnotado();
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  lerAnotado();
+  return { url: atual.urlAutomatica ?? atual.url, urlCodigo: atual.url, saida: semCores(atual.saida) };
 }
 
 // Envia o código que o site mostrou e espera o CLI terminar.
@@ -97,6 +124,10 @@ export async function enviarCodigo(codigo: string): Promise<{ ok: boolean; saida
   }
   const saida = resposta().replace(/Paste code here if prompted >/g, '').trim().slice(-400);
   return { ok: atual.concluido && atual.codigoSaida === 0, saida };
+}
+
+export function loginEmAndamento() {
+  return Boolean(login && !login.concluido);
 }
 
 export function cancelarLogin() {

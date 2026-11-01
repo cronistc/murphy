@@ -179,6 +179,21 @@
   .janela-pc .conteudo { flex: 1; overflow: auto; position: relative; font-family: system-ui, sans-serif; }
   .nav { display: flex; gap: 6px; padding: 6px 8px; background: #eef0f5; border-bottom: 2px solid #c3c9d6; }
   .nav input { background: #fff; color: #1d2230; border-width: 2px; padding: 4px 9px; font-family: system-ui, sans-serif; font-size: 14px; box-shadow: none; }
+  .slot-nav { flex: 1; display: flex; min-height: 0; }
+  .navegador { flex: 1; display: flex; flex-direction: column; min-height: 0; background: #f6f7fb; color: #1d2230; }
+  .navegador .conteudo { flex: 1; position: relative; overflow: hidden; }
+  .jan-navegador { max-width: 1240px !important; width: 100%; height: min(90vh, 860px); display: flex; flex-direction: column; }
+  .jan-navegador .slot-nav { border: 3px solid var(--tinta); }
+  .slot-login { height: min(56vh, 560px); border: 3px solid var(--tinta); margin: 8px 0; }
+  #boasvindas .cartao.com-login { max-width: 1000px; width: 100%; }
+  #pergunta { z-index: 40; }
+  .leitura { position: absolute; inset: 0; overflow: auto; padding: 18px 26px; font: 16px/1.55 system-ui, sans-serif; background: #fbfaf6; color: #222; }
+  .leitura h1, .leitura h2, .leitura h3 { font-family: system-ui, sans-serif; color: #111; text-transform: none; letter-spacing: 0; margin: 14px 0 6px; }
+  .leitura a { color: #2457b8; cursor: pointer; text-decoration: underline; display: block; margin: 2px 0; }
+  .leitura .fonte { color: #777; font-size: 13px; margin-bottom: 10px; }
+  .arquivos td.acoes { width: 90px; text-align: right; white-space: nowrap; }
+  .arquivos td.acoes button { background: transparent; box-shadow: none; padding: 0 5px; font-size: 15px; color: #5a6275; }
+  .arquivos td.acoes button:hover { color: #1d2230; }
   #navArea { position: absolute; inset: 0; background: #fff; }
   #navArea iframe { width: 100%; height: 100%; border: 0; background: #fff; }
   #navAviso { position: absolute; left: 0; right: 0; bottom: 0; background: #fff6d8; color: #5a4a10; font-size: 13px; padding: 6px 10px; border-top: 2px solid #e8d690; }
@@ -266,12 +281,13 @@
     <div class="cabecalho"><h1>☰ Menu</h1><button class="neutro pequeno" data-fechar>voltar ao jogo</button></div>
     <div class="menu">
       <button class="neutro" id="btnTelaCheia">⛶ Tela cheia <kbd>F11</kbd></button>
-      <button class="neutro" id="btnSom">🔊 som</button>
-      <button class="neutro" id="btnVozes">🎙️ Configurar vozes</button>
+      <button class="neutro" id="btnPasta">📁 Arquivos do projeto</button>
+      <button class="neutro" id="btnNavegadorMenu">🌐 Navegador</button>
+      <button class="neutro" id="btnJornalMenu">📺 Jornal do dia</button>
       <button class="neutro" id="btnWifiMenu">📶 Wi-Fi do escritório</button>
-      <button class="neutro" id="btnPasta">📁 Abrir a pasta do projeto</button>
       <button class="neutro" id="btnAjuda">❔ Como jogar</button>
       <button class="perigo" id="btnEncerrar">🌙 Encerrar o dia</button>
+      <button class="perigo" id="btnRecomecar">🔄 Recomeçar do zero</button>
     </div>
     <h2 style="margin-top:16px">Bastidores (log técnico)</h2>
     <label class="chk"><input type="checkbox" id="fAuto"> Aprovar pedidos de permissão automaticamente (nunca fora da pasta do projeto)</label>
@@ -300,8 +316,9 @@
       </div>
       <div id="bvEntrar" hidden><button class="grande" id="btnEntrar">Entrar com a conta Claude</button></div>
       <div id="bvCodigo" hidden>
-        <p>Abrimos o login no seu navegador. Se ele não abriu, <a id="loginLink" href="#" target="_blank" rel="noopener">clique aqui</a>.</p>
-        <p>Se o site mostrar um código, cole aqui:</p>
+        <p>Entre na sua conta Claude aqui embaixo. Quando terminar, o escritório percebe sozinho.</p>
+        <div class="slot-nav slot-login" id="slotNavLogin"></div>
+        <p class="vazio">Se o site mostrar um código: <button type="button" class="neutro pequeno" id="loginComCodigo">entrar com código</button> <button type="button" class="neutro pequeno" id="loginVoltar">voltar</button></p>
         <form id="formCodigo"><input id="fCodigo" autocomplete="off" placeholder="código"><button class="grande" type="submit">Confirmar</button></form>
       </div>
       <div class="erro" id="loginErro"></div>
@@ -351,12 +368,16 @@
       </div>
       <div class="janela-pc" id="jan-navegador" hidden>
         <div class="titulo-jan"><b>🌐 Navegador</b><button data-minimizar>—</button></div>
-        <div class="nav"><button id="navVoltar" title="Voltar">←</button><button id="navAvancar" title="Avançar">→</button><button id="navRecarregar" title="Recarregar">↻</button><input id="navEndereco" placeholder="Digite um endereço ou pesquise"><button id="navIr">Ir</button></div>
-        <div class="conteudo"><div id="navArea"></div><div id="navAviso" hidden></div></div>
+        <div class="slot-nav" id="slotNavPc">
+          <div class="navegador" id="navegador">
+            <div class="nav"><button id="navVoltar" title="Voltar">←</button><button id="navAvancar" title="Avançar">→</button><button id="navRecarregar" title="Recarregar">↻</button><input id="navEndereco" placeholder="Digite um endereço ou pesquise"><button id="navIr">Ir</button><button id="navLeitura" title="Modo leitura: só o texto da página">📄</button></div>
+            <div class="conteudo"><div id="navArea"></div><div id="navAviso" hidden></div></div>
+          </div>
+        </div>
       </div>
       <div class="janela-pc" id="jan-arquivos" hidden>
         <div class="titulo-jan"><b>📁 Arquivos</b><button data-minimizar>—</button></div>
-        <div class="caminho"><button id="arqSubir">↑ voltar</button><span id="arqCaminho"></span><span style="flex:1"></span><button id="arqNovo">+ novo arquivo</button></div>
+        <div class="caminho"><button id="arqSubir">↑ voltar</button><span id="arqCaminho"></span><span style="flex:1"></span><button id="arqNovaPasta">+ pasta</button><button id="arqNovo">+ arquivo</button></div>
         <div class="conteudo"><table class="arquivos" id="arqLista"></table></div>
       </div>
       <div class="janela-pc" id="jan-editor" hidden>
@@ -382,6 +403,25 @@
     <div class="cabecalho"><h1 id="telaTitulo">Tela</h1><button class="neutro pequeno" id="telaSentar">sentar junto</button><button class="neutro pequeno" data-fechar>fechar</button></div>
     <div id="telaFunc"></div>
   </div>
+</div>
+
+<div id="janNavegador" class="sobre" hidden>
+  <div class="cartao px jan-navegador">
+    <div class="cabecalho"><h1>🌐 Navegador do escritório</h1><button class="neutro pequeno" data-fechar>fechar</button></div>
+    <div class="slot-nav" id="slotNavJanela"></div>
+  </div>
+</div>
+
+<div id="pergunta" class="sobre" hidden>
+  <form class="cartao px" id="formPergunta" style="max-width:520px">
+    <h1 id="perguntaTitulo"></h1>
+    <p id="perguntaTexto"></p>
+    <input id="perguntaCampo" autocomplete="off" hidden>
+    <div class="linha" style="justify-content:flex-end;margin-top:12px;gap:8px">
+      <button type="button" class="neutro" id="perguntaNao">Cancelar</button>
+      <button type="submit" id="perguntaSim">OK</button>
+    </div>
+  </form>
 </div>
 
 <div id="janela" class="sobre" hidden>

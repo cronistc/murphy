@@ -79,13 +79,14 @@ class Escritorio(Gtk.Application):
         self.janela.set_child(self.aviso)
 
     # ---------- cérebro ----------
-    def ligar_cerebro(self):
+    def ligar_cerebro(self, mesma_porta=False):
         node = shutil.which('node')
         if not node or versao_node(node) < NODE_MINIMO:
             return self.mostrar_erro(f'Precisa do Node.js {NODE_MINIMO} ou mais novo. Instale com: sudo dnf install nodejs')
         os.makedirs(DADOS, exist_ok=True)
-        self.porta = porta_livre()
-        env = dict(os.environ, PORTA=str(self.porta), PASTA_LOGS=os.path.join(DADOS, 'logs'))
+        if not mesma_porta:
+            self.porta = porta_livre()
+        env = dict(os.environ, PORTA=str(self.porta), PASTA_LOGS=os.path.join(DADOS, 'logs'), ESCRITORIO_JANELA='1')
         self.log = open(os.path.join(DADOS, 'cerebro.log'), 'w')
         self.cerebro = subprocess.Popen(
             [node, os.path.join(PASTA_APP, 'dist', 'servidor.js')],
@@ -94,6 +95,29 @@ class Escritorio(Gtk.Application):
             preexec_fn=morrer_junto,
         )
         GLib.timeout_add(200, self.esperar_cerebro)
+
+    # "Recomeçar do zero" no jogo: o cérebro guarda o escritório antigo e sai
+    # com o código 75; a janela liga um cérebro novo na mesma porta e a página
+    # se recarrega sozinha.
+    def vigiar_cerebro(self):
+        if self.fechando or not self.cerebro:
+            return False
+        codigo = self.cerebro.poll()
+        if codigo is None:
+            return True
+        if codigo == 75:
+            self.cerebro = None
+            if hasattr(self, 'navegador'):
+                self.navegador.set_visible(False)
+            self.religando = True
+            self.tentativas = 0
+            self.ligar_cerebro(mesma_porta=True)
+            return False
+        self.log.flush()
+        with open(self.log.name) as f:
+            fim = f.read()[-1500:]
+        self.mostrar_erro(f'O cérebro parou (código {codigo}).\n\n{fim}')
+        return False
 
     def esperar_cerebro(self):
         if self.cerebro.poll() is not None:
@@ -110,7 +134,11 @@ class Escritorio(Gtk.Application):
                 self.mostrar_erro('O cérebro não respondeu em 30 segundos. Veja ' + self.log.name)
                 return False
             return True
-        self.abrir_tela()
+        if getattr(self, 'religando', False):
+            self.religando = False
+        else:
+            self.abrir_tela()
+        GLib.timeout_add(1000, self.vigiar_cerebro)
         return False
 
     def abrir_tela(self):
@@ -193,11 +221,16 @@ class Escritorio(Gtk.Application):
         return None
 
     def decidir(self, _web, decisao, tipo):
-        # Links externos (login, documentação) abrem no navegador do sistema.
+        # Nada abre fora do jogo: links para fora (e qualquer "nova janela")
+        # vão para o navegador do próprio jogo.
         if tipo in (WebKit.PolicyDecisionType.NAVIGATION_ACTION, WebKit.PolicyDecisionType.NEW_WINDOW_ACTION):
-            uri = decisao.get_navigation_action().get_request().get_uri()
-            if not uri.startswith(f'http://127.0.0.1:{self.porta}'):
-                Gio.AppInfo.launch_default_for_uri(uri, None)
+            acao = decisao.get_navigation_action()
+            uri = acao.get_request().get_uri() or ''
+            nosso = uri.startswith(f'http://127.0.0.1:{self.porta}')
+            if tipo == WebKit.PolicyDecisionType.NEW_WINDOW_ACTION or not nosso:
+                if uri.startswith(('http://', 'https://')):
+                    script = f'window.__abrirNoJogo && window.__abrirNoJogo({json.dumps(uri)})'
+                    self.web.evaluate_javascript(script, -1, None, None, None, None, None)
                 decisao.ignore()
                 return True
         return False

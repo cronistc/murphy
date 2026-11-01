@@ -18,12 +18,13 @@
 //   GET  /cofre, GET /cofre/:hash, POST /cofre/:hash/desfazer
 //   POST /terminais {"alvo"}          abre o computador (principal | voce | id); GET /terminais/:id/saida (SSE);
 //                                     POST /terminais/:id/entrada {"dados"}, /tamanho {"colunas","linhas"}, /fechar
-//   POST /entregar-meu-trabalho, POST /abrir-pasta {"alvo"}, POST /agenda/gerar
+//   POST /entregar-meu-trabalho, POST /recomecar, GET /leitura?url=, POST /agenda/gerar
 //   GET  /conta, POST /conta/entrar, POST /conta/codigo {"codigo"}
 //   POST /sessoes, GET /sessoes, GET /mesas?projeto=   API de baixo nível (demos)
 //   GET  /                            a tela do escritório (pasta web/)
 
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -228,6 +229,23 @@ const servidor = http.createServer(async (req, res) => {
     // ---------- computador: arquivos e prévia ----------
     if (rota === 'GET /arquivos') return json(res, 200, escritorio.listarArquivos(url.searchParams.get('alvo') ?? 'voce', url.searchParams.get('caminho') ?? ''));
     if (rota === 'GET /arquivo') return json(res, 200, escritorio.lerArquivo(url.searchParams.get('alvo') ?? 'voce', url.searchParams.get('caminho') ?? ''));
+    if (rota === 'POST /pasta') {
+      const p = await lerJson(req);
+      return json(res, 201, escritorio.criarPasta(String(p.alvo ?? 'voce'), String(p.caminho ?? '')));
+    }
+    if (rota === 'POST /arquivo/novo') {
+      const p = await lerJson(req);
+      return json(res, 201, escritorio.criarArquivo(String(p.alvo ?? 'voce'), String(p.caminho ?? '')));
+    }
+    if (rota === 'POST /arquivo/renomear') {
+      const p = await lerJson(req);
+      return json(res, 200, escritorio.renomear(String(p.alvo ?? 'voce'), String(p.de ?? ''), String(p.para ?? '')));
+    }
+    if (rota === 'POST /arquivo/apagar') {
+      const p = await lerJson(req);
+      return json(res, 200, escritorio.apagar(String(p.alvo ?? 'voce'), String(p.caminho ?? '')));
+    }
+    if (rota === 'POST /arquivo/restaurar') return json(res, 200, escritorio.restaurar(String((await lerJson(req)).id ?? '')));
     if (rota === 'PUT /arquivo') {
       const { alvo = 'voce', caminho, conteudo } = await lerJson(req);
       return json(res, 200, escritorio.salvarArquivo(alvo, caminho, conteudo ?? ''));
@@ -263,13 +281,21 @@ const servidor = http.createServer(async (req, res) => {
     }
 
     if (rota === 'POST /entregar-meu-trabalho') return json(res, 200, escritorio.entregarMeuTrabalho());
-    if (rota === 'POST /abrir-pasta') return json(res, 200, { pasta: escritorio.abrirPasta(String((await lerJson(req)).alvo ?? 'principal')) });
+    if (rota === 'POST /recomecar') {
+      json(res, 200, { ok: true });
+      return recomecar();
+    }
+    if (rota === 'GET /leitura') return json(res, 200, await leitura(url.searchParams.get('url') ?? ''));
     if (rota === 'POST /agenda/gerar') {
       escritorio.gerarAgenda(true);
       return json(res, 202, { ok: true });
     }
 
-    if (rota === 'GET /conta') return json(res, 200, await conta.status());
+    if (rota === 'GET /conta') return json(res, 200, { ...(await conta.status()), loginEmAndamento: conta.loginEmAndamento() });
+    if (rota === 'POST /conta/cancelar') {
+      conta.cancelarLogin();
+      return json(res, 200, { ok: true });
+    }
     if (rota === 'POST /conta/entrar') return json(res, 200, await conta.iniciarLogin());
     if (rota === 'POST /conta/codigo') {
       const { codigo } = await lerJson(req);
@@ -309,6 +335,64 @@ const servidor = http.createServer(async (req, res) => {
     json(res, 400, { erro: e instanceof Error ? e.message : String(e) });
   }
 });
+
+// Recomeçar do zero: guarda tudo o que o escritório lembra em
+// anteriores/<data> (nada é apagado) e reinicia o cérebro limpo. Na janela do
+// app, a saída 75 faz a janela religar o cérebro; rodando direto, ele se religa sozinho.
+function recomecar() {
+  if (saindo) return;
+  saindo = true;
+  conta.cancelarLogin();
+  for (const t of terminais.values()) t.fechar();
+  escritorio.desligar();
+  const destino = path.join(PASTA_DADOS, 'anteriores', new Date().toISOString().replace(/[:.]/g, '-'));
+  fs.mkdirSync(destino, { recursive: true });
+  for (const nome of ['escritorio.json', 'personas', 'atriz', 'lixeira']) {
+    const de = path.join(PASTA_DADOS, nome);
+    if (fs.existsSync(de)) fs.renameSync(de, path.join(destino, nome));
+  }
+  console.log(`🔄 recomeçando do zero; o escritório anterior ficou em ${destino}`);
+  for (const r of ouvintes) r.end();
+  servidor.close();
+  setTimeout(() => {
+    if (process.env.ESCRITORIO_JANELA === '1') process.exit(75);
+    spawn(process.execPath, process.argv.slice(1), { stdio: 'inherit', detached: true }).unref();
+    process.exit(0);
+  }, 400);
+}
+
+// Modo leitura do navegador do jogo: quando um site não deixa ser mostrado
+// dentro de outra página, o cérebro busca e devolve só o texto e os links.
+async function leitura(endereco: string) {
+  if (!/^https?:\/\//i.test(endereco)) throw new Error('endereço inválido');
+  const r = await fetch(endereco, { headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) EscritorioPixel', 'accept-language': 'pt-BR,pt;q=0.9' }, signal: AbortSignal.timeout(15000) });
+  const tipo = r.headers.get('content-type') ?? '';
+  if (!tipo.includes('html') && !tipo.includes('text')) throw new Error(`o site respondeu ${tipo || 'um arquivo'}, não uma página`);
+  const html = (await r.text()).slice(0, 3_000_000);
+  const titulo = desentidade(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '').trim();
+  const corpo = (html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html)
+    .replace(/<(script|style|noscript|svg|nav|footer|header|form|iframe|template)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+  const blocos: { t: string; texto: string; href?: string }[] = [];
+  const re = /<(h[1-4]|p|li|a|pre|blockquote)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+  for (let m; (m = re.exec(corpo)) && blocos.length < 400; ) {
+    const texto = desentidade(m[3].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+    if (!texto || texto.length < 2) continue;
+    const t = m[1].toLowerCase();
+    if (t === 'a') {
+      const href = m[2].match(/href\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+      try { blocos.push({ t, texto: texto.slice(0, 200), href: new URL(desentidade(href), r.url).href }); } catch {}
+    } else blocos.push({ t, texto: texto.slice(0, 4000) });
+  }
+  return { url: r.url, titulo, blocos };
+}
+function desentidade(t: string) {
+  return t.replace(/&(#x?[0-9a-f]+|\w+);/gi, (x, e: string) => {
+    if (e[0] === '#') { const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) ? String.fromCodePoint(n) : x; }
+    return ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ccedil: 'ç', atilde: 'ã', otilde: 'õ', aacute: 'á', eacute: 'é', iacute: 'í', oacute: 'ó', uacute: 'ú', acirc: 'â', ecirc: 'ê', ocirc: 'ô', agrave: 'à', hellip: '…', mdash: '—', ndash: '–', laquo: '«', raquo: '»' } as Record<string, string>)[e.toLowerCase()] ?? x;
+  });
+}
 
 // Fechou sem passar pelo fim do expediente (sinal): salva o que der e sai.
 let saindo = false;

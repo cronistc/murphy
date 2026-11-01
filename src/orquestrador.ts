@@ -243,7 +243,9 @@ export class Orquestrador extends EventEmitter {
     if (!nomeEscritorio) throw new Error('dê um nome ao escritório');
     const a = area(idArea);
     const nomeProjeto = String(projeto ?? '').trim() || nomeEscritorio;
-    const destino = path.resolve((pasta?.trim() || path.join(PASTA_PROJETOS, slug(nomeProjeto))).replace(/^~(?=\/|$)/, os.homedir()));
+    let destino = path.resolve((pasta?.trim() || path.join(PASTA_PROJETOS, slug(nomeProjeto))).replace(/^~(?=\/|$)/, os.homedir()));
+    // Escritório novo, pasta nova: não reaproveita o projeto de um escritório anterior com o mesmo nome.
+    if (!pasta?.trim()) for (let n = 2; fs.existsSync(destino) && fs.readdirSync(destino).length; n++) destino = path.join(PASTA_PROJETOS, `${slug(nomeProjeto)}-${n}`);
     Escritorio.abrir(destino); // valida e cria o repositório
     this.estado.escritorio = { nome: nomeEscritorio, area: a.id };
     this.estado.projeto = { nome: nomeProjeto, pasta: destino, descricao: descricao.trim() };
@@ -1265,10 +1267,66 @@ export class Orquestrador extends EventEmitter {
     this.salvar();
   }
 
-  abrirPasta(alvo = 'principal') {
-    const pasta = this.pastaDoComputador(alvo);
-    spawn('xdg-open', [pasta], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
-    return pasta;
+  criarPasta(alvo: string, relativo: string) {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    if (!rel) throw new Error('dê um nome à pasta');
+    if (fs.existsSync(abs)) throw new Error('já existe algo com esse nome');
+    fs.mkdirSync(abs, { recursive: true });
+    return { caminho: rel };
+  }
+
+  criarArquivo(alvo: string, relativo: string) {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    if (!rel) throw new Error('dê um nome ao arquivo');
+    if (fs.existsSync(abs)) throw new Error('já existe algo com esse nome');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, '');
+    return { caminho: rel };
+  }
+
+  renomear(alvo: string, de: string, para: string) {
+    const a = this.caminhoSeguro(alvo, de);
+    const b = this.caminhoSeguro(alvo, para);
+    if (!a.rel || !b.rel) throw new Error('nome inválido');
+    if (!fs.existsSync(a.abs)) throw new Error('não encontrei esse item');
+    if (fs.existsSync(b.abs)) throw new Error('já existe algo com esse nome');
+    fs.mkdirSync(path.dirname(b.abs), { recursive: true });
+    fs.renameSync(a.abs, b.abs);
+    return { caminho: b.rel };
+  }
+
+  // Apagar vai para a lixeira do escritório (fora do projeto): dá para desfazer.
+  private lixeira = new Map<string, { origem: string; guardado: string }>();
+  apagar(alvo: string, relativo: string) {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    if (!rel) throw new Error('não dá para apagar a pasta inteira do computador');
+    if (!fs.existsSync(abs)) throw new Error('não encontrei esse item');
+    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const guardado = path.join(PASTA_DADOS, 'lixeira', id, path.basename(abs));
+    fs.mkdirSync(path.dirname(guardado), { recursive: true });
+    try {
+      fs.renameSync(abs, guardado);
+    } catch {
+      fs.cpSync(abs, guardado, { recursive: true });
+      fs.rmSync(abs, { recursive: true, force: true });
+    }
+    this.lixeira.set(id, { origem: abs, guardado });
+    return { id, caminho: rel };
+  }
+
+  restaurar(id: string) {
+    const item = this.lixeira.get(id);
+    if (!item) throw new Error('esse item não está mais na lixeira');
+    if (fs.existsSync(item.origem)) throw new Error('já existe algo com esse nome no lugar');
+    fs.mkdirSync(path.dirname(item.origem), { recursive: true });
+    try {
+      fs.renameSync(item.guardado, item.origem);
+    } catch {
+      fs.cpSync(item.guardado, item.origem, { recursive: true });
+      fs.rmSync(item.guardado, { recursive: true, force: true });
+    }
+    this.lixeira.delete(id);
+    return { ok: true };
   }
 
   private relogioPersonas?: NodeJS.Timeout;
