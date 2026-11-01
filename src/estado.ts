@@ -25,6 +25,11 @@ export type Estado = {
   internet: boolean; // Wi-Fi do escritório: pesquisa e navegação web dos funcionários
   aprovarTudo: boolean;
   ideiasDitas: string[]; // datas em que cada um já contou a ideia do dia (id:data)
+  escritorio?: { nome: string; area: string };
+  fase: 'entrevista' | 'operando'; // entrevista: o chefe ainda está conhecendo o escritório com você
+  relatorio: Record<string, string>; // o relatório do chefe (vira ESCRITORIO.md no projeto)
+  recomendacao?: { cargo: string; motivo: string }[];
+  voz?: { chave: string; regiao: string }; // Azure Speech (vozes da Microsoft), opcional
 };
 
 export const PASTA_DADOS = path.resolve(
@@ -35,14 +40,19 @@ const ARQUIVO = path.join(PASTA_DADOS, 'escritorio.json');
 function novo(): Estado {
   return {
     versao: 2, boasVindas: false, equipe: [], conversas: {}, aberto: false, diario: [], pendentes: [],
-    internet: true, aprovarTudo: false, ideiasDitas: [],
+    internet: true, aprovarTudo: false, ideiasDitas: [], fase: 'entrevista', relatorio: {},
   };
 }
 
 export function carregar(): Estado {
   try {
     const e = JSON.parse(fs.readFileSync(ARQUIVO, 'utf8'));
-    if (e.versao === 2) return { ...novo(), ...e };
+    if (e.versao === 2) {
+      // 1.0 → 1.1: escritórios antigos já estavam operando.
+      if (!e.fase) e.fase = e.boasVindas ? 'operando' : 'entrevista';
+      if (!e.escritorio && e.projeto) e.escritorio = { nome: e.projeto.nome, area: 'programacao' };
+      return { ...novo(), ...e };
+    }
     if (e.versao === 1) {
       // 0.2 → 1.0: a conversa única era com o chefe.
       const chefe = (e.equipe ?? []).find((f: Funcionario) => f.cargo === 'chefe');

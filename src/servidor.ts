@@ -29,11 +29,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Escritorio } from './escritorio.ts';
 import { Orquestrador } from './orquestrador.ts';
-import { CARGOS } from './candidatos.ts';
+import { CARGOS, AREAS, area, tituloDe } from './candidatos.ts';
 import { formatar } from './log.ts';
 import { PASTA_DADOS } from './estado.ts';
 import { Terminal, terminais } from './terminal.ts';
 import * as conta from './conta.ts';
+import { sintetizar, vozDe } from './voz.ts';
 import type { Cargo, Evento } from './eventos.ts';
 
 const PORTA = Number(process.env.PORTA ?? 4317);
@@ -44,6 +45,7 @@ const TIPOS: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
+  '.woff2': 'font/woff2',
 };
 
 const escritorio = new Orquestrador({ pastaLogs: PASTA_LOGS, aprovarTudo: process.env.APROVAR_TUDO === '1' });
@@ -56,6 +58,10 @@ const ouvintes = new Set<http.ServerResponse>();
 const sse = (i: number) => `id: ${i}\ndata: ${JSON.stringify(historico[i])}\n\n`;
 let ultimaMaquina: Evento | undefined;
 escritorio.on('evento', (ev: Evento) => {
+  if (ev.tipo === 'fala_parcial') {
+    for (const res of ouvintes) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+    return;
+  }
   if (ev.tipo === 'maquina') {
     ultimaMaquina = ev;
     for (const res of ouvintes) res.write(`data: ${JSON.stringify(ev)}\n\n`);
@@ -84,7 +90,7 @@ function estadoPublico() {
   return {
     boasVindas: e.boasVindas,
     projeto: e.projeto,
-    equipe: e.equipe.map((f) => ({ ...f, titulo: CARGOS[f.cargo].titulo, ocupado: escritorio.ocupado(f.id), trabalhando: escritorio.trabalhando(f.id) })),
+    equipe: e.equipe.map((f) => ({ ...f, titulo: tituloDe(f), ocupado: escritorio.ocupado(f.id), trabalhando: escritorio.trabalhando(f.id) })),
     conversas: Object.fromEntries(Object.entries(e.conversas).map(([k, v]) => [k, v.slice(-60)])),
     contratacoes: [...escritorio.contratacoes].map(([id, c]) => ({ id, ...c, titulo: CARGOS[c.cargo].titulo })),
     aprovarTudo: e.aprovarTudo,
@@ -94,10 +100,16 @@ function estadoPublico() {
     diario: e.diario.slice(-40),
     pendentes: e.pendentes.length,
     maquina: escritorio.ultimaMaquina,
+    escritorio: e.escritorio,
+    fase: e.fase,
+    relatorio: e.relatorio,
+    recomendacao: e.recomendacao ?? [],
+    areas: AREAS,
+    vozConfigurada: Boolean(e.voz?.chave),
     cargos: Object.fromEntries(
       Object.entries(CARGOS)
         .filter(([k]) => k !== 'chefe')
-        .map(([k, v]) => [k, { titulo: v.titulo, verdade: v.verdade, modelo: v.modelo, grupo: v.grupo }]),
+        .map(([k, v]) => [k, { titulo: v.titulo, verdade: v.verdade, modelo: v.modelo, daArea: area(e.escritorio?.area).cargos.includes(k) }]),
     ),
   };
 }
@@ -213,6 +225,43 @@ const servidor = http.createServer(async (req, res) => {
       if (m[2] === 'fechar') t.fechar();
       return json(res, 200, { ok: true });
     }
+    // ---------- computador: arquivos e prévia ----------
+    if (rota === 'GET /arquivos') return json(res, 200, escritorio.listarArquivos(url.searchParams.get('alvo') ?? 'voce', url.searchParams.get('caminho') ?? ''));
+    if (rota === 'GET /arquivo') return json(res, 200, escritorio.lerArquivo(url.searchParams.get('alvo') ?? 'voce', url.searchParams.get('caminho') ?? ''));
+    if (rota === 'PUT /arquivo') {
+      const { alvo = 'voce', caminho, conteudo } = await lerJson(req);
+      return json(res, 200, escritorio.salvarArquivo(alvo, caminho, conteudo ?? ''));
+    }
+    if (req.method === 'GET' && (m = url.pathname.match(/^\/previa\/([\w-]+)\/?(.*)$/))) {
+      // O site que a equipe fez, servido de verdade (abre no navegador do computador).
+      let { abs } = escritorio.caminhoSeguro(m[1], decodeURIComponent(m[2]));
+      if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) abs = path.join(abs, 'index.html');
+      if (!fs.existsSync(abs)) {
+        res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end('<body style="font-family:system-ui;padding:2em;color:#555"><h2>Ainda não tem página aqui</h2><p>Quando a equipe criar um index.html nesta pasta, ele aparece aqui.</p></body>');
+      }
+      const ext = path.extname(abs).toLowerCase();
+      const tipos: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.pdf': 'application/pdf' };
+      res.writeHead(200, { 'content-type': tipos[ext] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
+      return res.end(fs.readFileSync(abs));
+    }
+
+    // ---------- vozes ----------
+    if (rota === 'GET /voz') {
+      const cfg = escritorio.estado.voz;
+      const f = escritorio.funcionario(url.searchParams.get('funcionario') ?? '');
+      if (!cfg || !f) return json(res, 404, { erro: 'voz não configurada' });
+      const audio = await sintetizar(cfg, url.searchParams.get('texto') ?? '', vozDe(f));
+      res.writeHead(200, { 'content-type': 'audio/mpeg', 'cache-control': 'max-age=86400' });
+      return res.end(audio);
+    }
+    if (rota === 'POST /voz/config') {
+      const { chave, regiao } = await lerJson(req);
+      if (chave) await sintetizar({ chave, regiao: regiao || 'brazilsouth' }, 'Olá!', { voz: 'pt-BR-FranciscaNeural', ritmo: '0%', tom: '0%' }); // testa antes de guardar
+      escritorio.definirVoz(chave ?? '', regiao ?? '');
+      return json(res, 200, { ok: true, configurada: Boolean(chave) });
+    }
+
     if (rota === 'POST /entregar-meu-trabalho') return json(res, 200, escritorio.entregarMeuTrabalho());
     if (rota === 'POST /abrir-pasta') return json(res, 200, { pasta: escritorio.abrirPasta(String((await lerJson(req)).alvo ?? 'principal')) });
     if (rota === 'POST /agenda/gerar') {

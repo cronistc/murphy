@@ -33,6 +33,10 @@ const ICONE: Record<Evento['tipo'], string> = {
   maquina: '🌡️',
   cofre: '🗄️',
   config: '⚙️',
+  fala_parcial: '💭',
+  relatorio: '📝',
+  recomendacao: '👥',
+  pensando: '🧠',
 };
 
 export function formatar(ev: Evento): string {
@@ -110,6 +114,18 @@ export function formatar(ev: Evento): string {
       break;
     case 'config':
       corpo = `internet=${ev.internet} aprovarTudo=${ev.aprovarTudo}`;
+      break;
+    case 'fala_parcial':
+      corpo = `${ev.funcionario}: ${encurtar(ev.texto, 80)}`;
+      break;
+    case 'relatorio':
+      corpo = Object.keys(ev.secoes).join(', ');
+      break;
+    case 'recomendacao':
+      corpo = ev.itens.map((i) => i.cargo).join(', ');
+      break;
+    case 'pensando':
+      corpo = `${ev.funcionario}: ${ev.motivo}${ev.ate ? ' (pronto)' : ''}`;
       break;
     case 'tarefa_delegada':
       corpo = `${ev.de} → ${ev.para}: ${encurtar(ev.tarefa, 120)}`;

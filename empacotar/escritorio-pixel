@@ -4,6 +4,7 @@
 # WebKit e, ao fechar a janela, desliga o cérebro e os funcionários.
 
 import ctypes
+import json
 import os
 import shutil
 import signal
@@ -62,6 +63,7 @@ class Escritorio(Gtk.Application):
             return
         self.janela = Gtk.ApplicationWindow(application=self, title='Escritório Pixel')
         self.janela.set_default_size(1440, 900)
+        self.janela.maximize()  # o escritório ocupa a tela; F11 deixa em tela cheia
         self.janela.connect('close-request', self.ao_fechar)
         self.aviso = Gtk.Label(label='Abrindo o escritório…')
         self.aviso.set_wrap(True)
@@ -114,10 +116,81 @@ class Escritorio(Gtk.Application):
     def abrir_tela(self):
         os.makedirs(CACHE, exist_ok=True)
         sessao = WebKit.NetworkSession.new(os.path.join(DADOS, 'web'), os.path.join(CACHE, 'web'))
-        self.web = WebKit.WebView(network_session=sessao)
+        # A página do escritório conversa com a janela pelo canal "navegador":
+        # é assim que o computador do jogo abre um navegador de verdade.
+        conteudo = WebKit.UserContentManager()
+        conteudo.register_script_message_handler('navegador', None)
+        conteudo.connect('script-message-received::navegador', self.mensagem_navegador)
+        conteudo.register_script_message_handler('janela', None)
+        conteudo.connect('script-message-received::janela', self.mensagem_janela)
+        self.web = WebKit.WebView(network_session=sessao, user_content_manager=conteudo)
         self.web.connect('decide-policy', self.decidir)
         self.web.load_uri(f'http://127.0.0.1:{self.porta}/')
-        self.janela.set_child(self.web)
+        # O navegador do computador do jogo: um WebKit de verdade, por cima da
+        # área do navegador na tela do computador (posição informada pela página).
+        self.navegador = WebKit.WebView(network_session=sessao)
+        self.navegador.set_halign(Gtk.Align.START)
+        self.navegador.set_valign(Gtk.Align.START)
+        self.navegador.set_visible(False)
+        self.navegador.connect('notify::uri', self.navegador_mudou)
+        self.navegador.connect('create', self.navegador_nova_janela)
+        sobre = Gtk.Overlay()
+        sobre.set_child(self.web)
+        sobre.add_overlay(self.navegador)
+        self.janela.set_child(sobre)
+
+    def mensagem_janela(self, _gerente, valor):
+        # F11 / menu: tela cheia de verdade (a janela inteira, sem bordas).
+        try:
+            dados = json.loads(valor.to_json(0))
+        except Exception:
+            return
+        if dados.get('acao') == 'telaCheia':
+            if self.janela.is_fullscreen():
+                self.janela.unfullscreen()
+            else:
+                self.janela.fullscreen()
+
+    def mensagem_navegador(self, _gerente, valor):
+        try:
+            dados = json.loads(valor.to_json(0))
+        except Exception:
+            return
+        acao = dados.get('acao')
+        nav = self.navegador
+        if acao in ('abrir', 'mover'):
+            x, y = max(0, int(dados.get('x', 0))), max(0, int(dados.get('y', 0)))
+            w, h = max(50, int(dados.get('w', 400))), max(50, int(dados.get('h', 300)))
+            nav.set_margin_start(x)
+            nav.set_margin_top(y)
+            nav.set_size_request(w, h)
+            nav.set_visible(True)
+            if acao == 'abrir' and dados.get('url', '').startswith(('http://', 'https://')):
+                nav.load_uri(dados['url'])
+        elif acao == 'esconder':
+            nav.set_visible(False)
+        elif acao == 'fechar':
+            nav.set_visible(False)
+            nav.load_uri('about:blank')
+        elif acao == 'voltar' and nav.can_go_back():
+            nav.go_back()
+        elif acao == 'avancar' and nav.can_go_forward():
+            nav.go_forward()
+        elif acao == 'recarregar':
+            nav.reload()
+
+    def navegador_mudou(self, nav, _param):
+        uri = nav.get_uri() or ''
+        if uri and uri != 'about:blank':
+            script = f'window.__navegadorNativo && window.__navegadorNativo({json.dumps({"url": uri})})'
+            self.web.evaluate_javascript(script, -1, None, None, None, None, None)
+
+    def navegador_nova_janela(self, nav, acao):
+        # Links que abririam outra janela abrem no próprio navegador do computador.
+        uri = acao.get_request().get_uri()
+        if uri:
+            nav.load_uri(uri)
+        return None
 
     def decidir(self, _web, decisao, tipo):
         # Links externos (login, documentação) abrem no navegador do sistema.

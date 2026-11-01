@@ -23,6 +23,11 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - `web/`: a tela, JS puro sem build, servida pelo cérebro. `mapa.js` (mapa e caminhos), `comportamento.js` (a única tabela evento real → comportamento), `desenho.js` (pixel art), `jogo.js` (você andando, vida da equipe, painel, janelas, terminal). `xterm.js`/`addon-fit.js` são cópias do npm (@xterm/xterm 5.5, addon-fit 0.10).
 - `src/conta.ts`: login na conta Claude pelo `claude auth login` oficial (embutido no SDK), rodado num pty (`script`) para aceitar o código colado na tela.
 - `empacotar/`: pacote do Fedora. `escritorio-pixel` é a janela (Python + GTK4 + WebKitGTK 6) que liga o cérebro numa porta livre e o desliga ao fechar (inclusive se a janela morrer: PR_SET_PDEATHSIG). `construir-rpm.sh` gera `build/*.rpm` (`npm run rpm`).
+- `src/persona.ts`: a parte rápida de cada pessoa (Haiku sempre ligado, streaming input, sem ferramentas de arquivo). Fala com o gestor e decide quando "pensar melhor" (sessão do modelo do cargo, só leitura) ou, no chefe, `planejar` (turno do Opus). No máximo 6 ligadas (LRU, o chefe nunca sai); desligam após 20 min paradas.
+- Começo de jogo: abertura → conta → escritório (nome + área de `AREAS`) → fase `entrevista` (o chefe pergunta, `anotar_relatorio` grava ESCRITORIO.md no projeto, `recomendar_equipe`) → contratação → fase `operando`.
+- `src/voz.ts`: vozes neurais pt-BR da Microsoft pelo Azure Speech oficial, com a chave do próprio usuário (Menu → Configurar vozes). Sem chave, sem voz.
+- `web/retrato.js`: retrato 48×64 do diálogo, gerado do id (use `>>>`, nunca `>>`, ao tirar bits do hash). `web/index.html` é tela cheia só com o escritório e um HUD pixelado (fontes Pixelify Sans nos títulos e VT323 no texto, copiadas do @fontsource).
+- O computador do jogo é uma área de trabalho (navegador, arquivos, editor, terminal, histórico). Sites externos abrem num WebView nativo sobreposto (handler `navegador` da janela GTK); a prévia do projeto vem de `/previa/<alvo>/...`, com `caminhoSeguro` (nada fora da pasta, nada em `.git`).
 - `src/demo-equipe.ts`: três funcionários em paralelo, cada um na sua mesa, com verificação no git (é o teste de ponta a ponta da etapa 2).
 
 ## Experiência (não perder de vista)
@@ -43,4 +48,5 @@ Jogo 2D em que IAs reais (via CLIs oficiais) trabalham num escritório. A ideia 
 - Segurança: nenhuma ferramenta age fora da pasta do projeto (`caminhoForaDaPasta` + `blockedPath` da CLI), mesmo com aprovação automática.
 - `Escritorio.abrir` nunca roda `git init` em pasta com arquivos, na home ou na raiz do sistema.
 - O pacote não pode passar por `strip`: o Claude Code embutido é um executável único e quebra (o spec desliga isso).
+- Falas de personagens não usam markdown (instrução + `semMarcacao`); só o chat técnico do gestor pode ter.
 - Sessões de funcionários rodam com `ambienteLimpo()`: sem as variáveis de identidade de uma sessão do Claude Code que tenha iniciado o cérebro (senão todos herdam o session_id dela).

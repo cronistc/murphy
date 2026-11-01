@@ -152,6 +152,20 @@ export class Escritorio {
     return true;
   }
 
+  // Um arquivo do próprio escritório (ex.: o relatório) direto na principal.
+  // Só se o resto da pasta principal estiver limpo: nunca mistura com outra coisa.
+  commitPrincipal(arquivo: string, mensagem: string) {
+    const sujos = git(this.projeto, 'status', '--porcelain').split('\n').filter(Boolean);
+    if (!sujos.length || sujos.some((l) => !l.endsWith(arquivo))) return false;
+    git(this.projeto, 'add', '--', arquivo);
+    // Várias anotações seguidas viram um registro só (corrige o anterior).
+    const ultimo = tenta(() => git(this.projeto, 'log', '-1', '--format=%s'));
+    const soEle = tenta(() => git(this.projeto, 'show', '--name-only', '--format=', 'HEAD')) === arquivo;
+    if (ultimo === mensagem && soEle) git(this.projeto, 'commit', '-q', '--amend', '--no-edit', '--', arquivo);
+    else git(this.projeto, 'commit', '-q', '-m', mensagem, '--', arquivo);
+    return true;
+  }
+
   // O cofre: o histórico da branch principal (cada entrega é um merge).
   historico(n = 60): { hash: string; assunto: string; autor: string; em: string; merge: boolean }[] {
     const saida = tenta(() => git(this.projeto, 'log', '--first-parent', this.principal(), `-n${n}`, '--format=%H%x1f%P%x1f%s%x1f%an%x1f%aI'));

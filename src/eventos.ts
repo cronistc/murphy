@@ -51,10 +51,30 @@ export type Evento = EventoBase &
     | { tipo: 'aniversario'; funcionario: string }
     | { tipo: 'maquina'; carga: number; temperatura: number; nucleos: number } // carga real do PC
     | { tipo: 'cofre'; acao: 'desfeito'; hash: string; assunto: string }
-    | { tipo: 'config'; internet: boolean; aprovarTudo: boolean }
+    | { tipo: 'config'; internet: boolean; aprovarTudo: boolean; voz?: string }
+    // Fala chegando em tempo real (não vai para o histórico; só ao vivo).
+    | { tipo: 'fala_parcial'; funcionario: string; texto: string; idFala: string; fim?: boolean }
+    // O relatório que o chefe monta com você (vira ESCRITORIO.md no projeto).
+    | { tipo: 'relatorio'; secoes: Record<string, string> }
+    // A equipe que o chefe recomenda contratar.
+    | { tipo: 'recomendacao'; itens: { cargo: string; motivo: string }[] }
+    | { tipo: 'pensando'; funcionario: string; motivo: string; ate?: boolean } // escalou para o modelo mais inteligente
   );
 
-export type Cargo = 'chefe' | 'senior' | 'pleno' | 'junior' | 'designer' | 'redator' | 'pesquisador' | 'qa' | 'arquiteto' | 'ti';
+export type Cargo = string; // ver CARGOS em candidatos.ts
+
+// A vida de cada um, fora do trabalho.
+export type Ficha = {
+  idade: number;
+  cidade: string;
+  hobbies: string[];
+  pet: string;
+  familia: string;
+  time: string;
+  musica: string;
+  comida: string;
+  mania: string;
+};
 
 export type Funcionario = {
   id: string; // slug: nome da mesa e da branch
@@ -67,6 +87,9 @@ export type Funcionario = {
   aniversario?: string; // MM-DD
   ferias?: boolean;
   ultimaSessao?: string; // session_id da CLI da última conversa/tarefa (memória)
+  genero?: 'f' | 'm';
+  ficha?: Ficha;
+  titulo?: string; // título próprio (o chefe tem o título da área)
 };
 
 // Agenda do dia, gerada uma vez de manhã pela "atriz" (modelo barato).
@@ -75,6 +98,7 @@ export type Agenda = {
   jornal: { titulo: string; fonte: string; url?: string; resumo: string }[];
   falas: Record<string, string[]>;
   ideias: Record<string, string>;
+  vida?: Record<string, string>; // o que cada um fez ontem/no fim de semana
 };
 
 export type TipoEvento = Evento['tipo'];

@@ -11,15 +11,19 @@ Um escritório em pixel art onde funcionários de IA trabalham de verdade: por t
    ```bash
    sudo dnf install ./escritorio-pixel-*.x86_64.rpm
    ```
-3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez: confirme a conta Claude (assinatura Pro ou Max), dê nome ao primeiro projeto, e o chefe chega.
+3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez: apresentação → conta Claude (assinatura Pro ou Max) → crie o seu escritório escolhendo a área (programação, design, escrita, direito, marketing, pesquisa) → o seu parceiro (o chefe) chega e te entrevista sobre o escritório e o projeto, anota tudo num relatório e recomenda uma equipe → você contrata.
 
 ## Como jogar
 
-Você é o **gestor**. Ande pelo escritório com **WASD** ou as setas (ou clique onde quer ir). Chegue perto de algo e aperte **E**.
+Você é o **gestor**. Ande pelo escritório com **WASD** ou as setas (ou clique onde quer ir). Chegue perto de algo e aperte **E**. A tela é só o escritório, com um HUD em pixel art: **F11** tela cheia, **T** equipe, **R** relatório do chefe, **M** menu, **Esc** fecha.
+
+- **Diálogo:** falar com alguém abre uma caixa de diálogo com o retrato da pessoa em pixel art; a resposta aparece enquanto ela fala. Cada um tem uma parte rápida (Haiku, a personalidade, sempre ligada) e, quando a pergunta pede, para e "pensa melhor" com um modelo mais forte. O chefe organiza o escritório; você fala com qualquer um, mas a equipe fala com o chefe.
+- **Vida própria:** cada pessoa tem idade, cidade, família, hobbies, pet, time, música; conversa sobre isso, e ideias de trabalho só aparecem a partir do que o projeto realmente já tem.
+- **Vozes (opcional):** Menu → Configurar vozes, com uma chave gratuita do Azure Speech (vozes neurais da Microsoft em português). Sem chave, só balões.
 
 - **Converse** com o **chefe ★** (Opus): diga o que quer construir. Ele planeja, distribui e, se faltar gente, **pede para contratar**. Fale com qualquer um de perto (E) ou pelo ramal (painel).
 - **Contrate** em "+ Contratar alguém": júnior, pleno, sênior e especialistas (designer, redator, pesquisador, QA, arquiteto, T.I.), cada um com o guia do seu ofício.
-- **Computadores:** sente numa mesa vaga ou na sua para abrir um **terminal de verdade**; na mesa de quem está trabalhando, você **vê a tela** da pessoa ao vivo e pode sentar junto.
+- **Computadores:** sente numa mesa vaga ou na sua para abrir uma **área de trabalho**: navegador (prévia do projeto e internet), arquivos, editor de texto, terminal de verdade, histórico e "entregar meu trabalho"; na mesa de quem está trabalhando, você **vê a tela** da pessoa ao vivo e pode sentar junto.
 - **Cofre:** histórico e **desfazer** entregas. **Roteador:** liga/desliga a internet da equipe. **Ar:** a temperatura é a carga real do PC. **TV:** jornal do dia com notícias reais. **Estante:** diário do escritório.
 - **Ficha** (clique em alguém): humor, elogiar, bronca, férias, desligar, tarefa direta, log técnico.
 - **Expediente:** o escritório abre quando você abre o app (luzes, chegada, daily) e fecha quando você fecha: cada um salva o trabalho, anota onde parou e vai embora. No dia seguinte, continuam de onde pararam.

@@ -12,21 +12,33 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { Sessao, encurtar, type Decisao, type PedidoPermissao } from './sessao.ts';
 import { Escritorio, slug } from './escritorio.ts';
 import { registrar } from './log.ts';
 import { carregar, salvar, hoje, PASTA_DADOS, type Estado, type Pendente } from './estado.ts';
-import { CARGOS, candidatos, type Candidato } from './candidatos.ts';
+import { CARGOS, candidatos, area, tituloDoChefe, tituloDe, fichaDe, type Candidato } from './candidatos.ts';
+import { Persona } from './persona.ts';
 import type { Agenda, Cargo, Evento, Funcionario } from './eventos.ts';
 
 const PASTA_PROJETOS = path.join(os.homedir(), 'escritorio-projetos');
-const CARGOS_CONTRATAVEIS = Object.keys(CARGOS).filter((c) => c !== 'chefe') as Exclude<Cargo, 'chefe'>[];
+const CARGOS_CONTRATAVEIS = Object.keys(CARGOS).filter((c) => c !== 'chefe');
+const MAX_PERSONAS_LIGADAS = 6;
 // Ferramentas do escritório sempre visíveis para o modelo (sem precisar de
 // ToolSearch); sem isso, quem não "procura" a ferramenta acha que ela não existe.
 const SEMPRE = { alwaysLoad: true };
+// Fala de gente não tem markdown: tira negrito, títulos, marcadores e crases.
+export function semMarcacao(t: string) {
+  return t
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*•]\s+/gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim();
+}
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const horaCurta = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
@@ -106,9 +118,13 @@ export class Orquestrador extends EventEmitter {
   private mesaEmUso(id: string) {
     return [...this.sessoes.values()].some((r) => r.estado === 'rodando' && !r.conversa && r.mesaDe === id);
   }
+  // A equipe como a tela vê: com o título no gênero de cada um.
+  equipePublica() {
+    return this.estado.equipe.map((f) => ({ ...f, titulo: tituloDe(f) }));
+  }
   private equipeMudou(motivo: string) {
     this.salvar();
-    this.doEscritorio({ tipo: 'equipe', equipe: this.estado.equipe, motivo });
+    this.doEscritorio({ tipo: 'equipe', equipe: this.equipePublica(), motivo });
   }
 
   // ---------- expediente ----------
@@ -121,7 +137,7 @@ export class Orquestrador extends EventEmitter {
     this.estado.aberto = true;
     this.encerrando = false;
     this.salvar();
-    this.doEscritorio({ tipo: 'equipe', equipe: this.estado.equipe, motivo: 'chegada' });
+    this.doEscritorio({ tipo: 'equipe', equipe: this.equipePublica(), motivo: 'chegada' });
     this.doEscritorio({ tipo: 'expediente', fase: 'aberto', luzCaiu, daily: this.textoDaily(luzCaiu) });
     const md = hoje().slice(5);
     for (const f of this.estado.equipe) {
@@ -140,6 +156,18 @@ export class Orquestrador extends EventEmitter {
     }
     setTimeout(() => this.retomarPendentes(), 15000).unref();
     setTimeout(() => this.gerarAgenda().catch(() => {}), 4000).unref();
+    this.aquecerPersonas();
+    // Persona parada há muito tempo desliga (economiza memória); religa ao conversar.
+    clearInterval(this.relogioPersonas);
+    this.relogioPersonas = setInterval(() => {
+      for (const [id, p] of this.personas) {
+        if (id !== this.chefe?.id && p.vivo && !p.ocupada && Date.now() - p.ultimoUso > 20 * 60_000) {
+          p.desligar();
+          this.personas.delete(id);
+        }
+      }
+    }, 60_000);
+    this.relogioPersonas.unref();
   }
 
   private textoDaily(luzCaiu: boolean): string {
@@ -183,6 +211,8 @@ export class Orquestrador extends EventEmitter {
     this.estado.aberto = false;
     this.salvar();
     this.doEscritorio({ tipo: 'expediente', fase: 'encerrado', resumo });
+    this.desligarPersonas();
+    clearInterval(this.relogioPersonas);
     clearInterval(this.relogioMaquina);
     return resumo;
   }
@@ -206,30 +236,42 @@ export class Orquestrador extends EventEmitter {
   }
 
   // ---------- primeira abertura ----------
-  boasVindas({ nome, descricao = '', pasta }: { nome: string; descricao?: string; pasta?: string }) {
-    if (!nome?.trim()) throw new Error('dê um nome ao projeto');
-    const destino = path.resolve((pasta?.trim() || path.join(PASTA_PROJETOS, slug(nome))).replace(/^~(?=\/|$)/, os.homedir()));
+  // Você cria o escritório (nome + área). Entra só você e o seu parceiro, o
+  // chefe da área, que te entrevista, monta o relatório e recomenda a equipe.
+  boasVindas({ escritorio, area: idArea, projeto, descricao = '', pasta }: { escritorio?: string; area?: string; projeto?: string; nome?: string; descricao?: string; pasta?: string } & Record<string, any>) {
+    const nomeEscritorio = String(escritorio ?? arguments[0]?.nome ?? '').trim();
+    if (!nomeEscritorio) throw new Error('dê um nome ao escritório');
+    const a = area(idArea);
+    const nomeProjeto = String(projeto ?? '').trim() || nomeEscritorio;
+    const destino = path.resolve((pasta?.trim() || path.join(PASTA_PROJETOS, slug(nomeProjeto))).replace(/^~(?=\/|$)/, os.homedir()));
     Escritorio.abrir(destino); // valida e cria o repositório
-    this.estado.projeto = { nome: nome.trim(), pasta: destino, descricao: descricao.trim() };
-    if (!this.chefe) this.admitir(candidatos('chefe', [])[0]);
+    this.estado.escritorio = { nome: nomeEscritorio, area: a.id };
+    this.estado.projeto = { nome: nomeProjeto, pasta: destino, descricao: descricao.trim() };
+    this.estado.fase = 'entrevista';
+    this.estado.relatorio = {};
+    if (!this.chefe) {
+      const c = candidatos('chefe', [])[0];
+      this.admitir({ ...c, titulo: tituloDoChefe(a.id) });
+    }
     this.estado.boasVindas = true;
     this.estado.aberto = true;
     this.salvar();
     const chefe = this.chefe!;
     this.equipeMudou('chegada');
-    this.doEscritorio({ tipo: 'expediente', fase: 'aberto', luzCaiu: false, daily: `Bem-vindo! Eu sou ${chefe.nome}.` });
+    this.doEscritorio({ tipo: 'expediente', fase: 'aberto', luzCaiu: false, daily: `Bem-vindo ao ${nomeEscritorio}!` });
     this.mensagem(
       chefe.id,
       'voce',
-      `Oi! Eu sou ${chefe.nome} e vou cuidar da equipe do "${this.estado.projeto.nome}". Por enquanto a equipe sou só eu. ` +
-        'Me conta o que vamos construir: eu monto o plano, distribuo o trabalho e, se faltar gente, peço para contratar.',
+      `Oi! Eu sou ${chefe.nome}, ${chefe.genero === 'f' ? 'a' : 'o'} ${tituloDe(chefe).toLowerCase()} do ${nomeEscritorio}. ` +
+        'Antes de contratar alguém, quero entender direitinho o que a gente vai fazer. Me conta: o escritório vai trabalhar com o quê, e pra quem?',
     );
+    this.aquecerPersonas();
     setTimeout(() => this.gerarAgenda().catch(() => {}), 2000).unref();
   }
 
   // ---------- equipe: contratar, férias, demitir, humor ----------
   candidatos(cargo: Cargo): Candidato[] {
-    if (!CARGOS_CONTRATAVEIS.includes(cargo as any)) throw new Error('cargo inválido');
+    if (!CARGOS_CONTRATAVEIS.includes(cargo)) throw new Error('cargo inválido');
     return candidatos(cargo, this.estado.equipe.map((f) => f.nome));
   }
 
@@ -243,8 +285,16 @@ export class Orquestrador extends EventEmitter {
       contratadoEm: new Date().toISOString(),
       humor: c.humor ?? 75,
       aniversario: c.aniversario,
+      genero: c.genero,
+      ficha: c.ficha ?? fichaDe(c.nome),
+      ...(c.titulo && c.cargo === 'chefe' ? { titulo: c.titulo } : {}),
     };
     this.estado.equipe.push(f);
+    // A personalidade já liga na contratação: a primeira conversa sai rápida.
+    if (this.estado.boasVindas) setTimeout(() => this.personaDe(f).ligar(), 500).unref();
+    // Quem chega no meio do dia também ganha a "vida de hoje" (agenda refeita, uma vez só).
+    clearTimeout(this.agendaNovatos);
+    if (this.estado.boasVindas) this.agendaNovatos = setTimeout(() => this.gerarAgenda(true).catch(() => {}), 90_000);
     return f;
   }
 
@@ -254,6 +304,7 @@ export class Orquestrador extends EventEmitter {
     const f = this.admitir(c);
     this.equipeMudou(`contratou ${f.nome}`);
     this.diario('voce', `Contratou ${f.nome} (${CARGOS[cargo].titulo}).`);
+    this.comecarOperacao();
     this.recados.push(`[Aviso do escritório] O gestor contratou ${f.nome} (${CARGOS[cargo].titulo}, id "${f.id}"). Já pode delegar.`);
     return f;
   }
@@ -266,6 +317,7 @@ export class Orquestrador extends EventEmitter {
     if (aprovar) {
       f = this.admitir(this.candidatos(p.cargo)[0]);
       this.equipeMudou(`contratou ${f.nome}`);
+      this.comecarOperacao();
       this.diario('voce', `Aprovou a contratação de ${f.nome} (${CARGOS[p.cargo].titulo}).`);
     }
     this.doEscritorio({ tipo: 'contratacao_respondida', idPedido, aprovada: aprovar, contratado: f?.nome });
@@ -417,7 +469,6 @@ export class Orquestrador extends EventEmitter {
           true,
         );
       }
-      setTimeout(() => this.processarConversa(f.id), 300);
     });
     return sessao.id;
   }
@@ -503,12 +554,12 @@ export class Orquestrador extends EventEmitter {
         f();
       } catch {}
     }
-    for (const id of this.filas.keys()) this.processarConversa(id);
     this.proximoDoChefe();
   }
 
   // ---------- conversas ----------
   private mensagem(de: string, para: string, texto: string) {
+    if (de !== 'voce') texto = semMarcacao(texto);
     const m = { de, para, texto, em: new Date().toISOString() };
     const chave = de === 'voce' ? para : de;
     (this.estado.conversas[chave] ??= []).push(m);
@@ -516,7 +567,8 @@ export class Orquestrador extends EventEmitter {
     this.doEscritorio({ tipo: 'mensagem', de, para, texto, em: m.em }); // mesmo horário: a tela não duplica
   }
 
-  // O gestor fala com alguém (de perto, ou pelo ramal).
+  // O gestor fala com alguém (de perto, ou pelo ramal). Quem responde na hora é
+  // a persona (rápida); se precisar, ela chama o modelo mais inteligente.
   conversar(id: string, texto: string) {
     const f = this.funcionario(id);
     if (!f) throw new Error('essa pessoa não está na equipe');
@@ -528,14 +580,11 @@ export class Orquestrador extends EventEmitter {
       this.mensagem(f.id, 'voce', 'Tô de férias! 🏖️ Falo com você quando voltar.');
       return;
     }
-    if (f.cargo === 'chefe') {
-      this.avisarChefe(texto, true);
+    if (this.almocoAte) {
+      this.mensagem(f.id, 'voce', `Tô no almoço! Volto às ${horaCurta(this.almocoAte)}.`);
       return;
     }
-    const fila = this.filas.get(f.id) ?? [];
-    fila.push(texto);
-    this.filas.set(f.id, fila);
-    this.processarConversa(f.id);
+    this.responderComPersona(f, texto);
   }
 
   // Compatibilidade: falar com o chefe.
@@ -544,41 +593,136 @@ export class Orquestrador extends EventEmitter {
     this.conversar(this.chefe.id, texto);
   }
 
-  // Conversa sobre trabalho: quem responde é a própria trabalhadora (a sessão
-  // dela é retomada), então o personagem nunca inventa progresso.
-  private async processarConversa(id: string) {
-    const fila = this.filas.get(id);
-    const f = this.funcionario(id);
-    if (!fila?.length || !f || this.conversando.has(id)) return;
-    if (this.almocoAte) {
-      if (!this.avisadoOcupado.has(id)) {
-        this.avisadoOcupado.add(id);
-        this.mensagem(id, 'voce', `Tô no almoço! Volto às ${horaCurta(this.almocoAte)}.`);
+  // ---------- personas (a personalidade rápida de cada um) ----------
+  private personas = new Map<string, Persona>();
+  private conversouDesdeQueLigou = new Set<string>();
+
+  private personaDe(f: Funcionario): Persona {
+    let p = this.personas.get(f.id);
+    if (p) return p;
+    // Limite de sessões ligadas: desliga a menos usada (nunca a do chefe).
+    const ligadas = [...this.personas.entries()].filter(([, x]) => x.vivo);
+    if (ligadas.length >= MAX_PERSONAS_LIGADAS) {
+      const [idVelha, velha] = ligadas.filter(([i, x]) => i !== this.chefe?.id && !x.ocupada).sort((a, b) => a[1].ultimoUso - b[1].ultimoUso)[0] ?? [];
+      if (velha) {
+        velha.desligar();
+        this.personas.delete(idVelha!);
       }
-      return;
     }
-    if (this.trabalhando(id)) {
-      if (!this.avisadoOcupado.has(id)) {
-        this.avisadoOcupado.add(id);
-        this.mensagem(id, 'voce', 'Tô no meio de uma tarefa. Assim que terminar eu te respondo!');
-      }
-      return;
+    const ferramentas = f.cargo === 'chefe' ? this.ferramentasDaPersonaChefe(f) : this.ferramentasDoFuncionario(f);
+    p = new Persona({
+      id: f.id,
+      sistema: this.sistemaDaPersona(f),
+      ferramentas: { escritorio: ferramentas.servidor },
+      liberadas: ferramentas.nomes.map((n) => `mcp__escritorio__${n}`),
+      pasta: path.join(PASTA_DADOS, 'personas', f.id),
+      log: path.join(this.pastaLogs, `persona-${f.id}.jsonl`),
+    });
+    p.on('cota', (info: any) =>
+      this.verCota({ tipo: 'cota', sessao: 'persona', em: new Date().toISOString(), status: info.status, janela: info.rateLimitType, uso: info.utilization, renovaEm: info.resetsAt ? new Date(info.resetsAt * 1000).toISOString() : undefined }),
+    );
+    this.personas.set(f.id, p);
+    this.conversouDesdeQueLigou.delete(f.id);
+    return p;
+  }
+
+  // Liga as personas de quem está no escritório (o chefe primeiro), para a
+  // primeira conversa do dia já sair rápida.
+  aquecerPersonas() {
+    const presentes = this.estado.equipe.filter((f) => !f.ferias).sort((a, b) => (a.cargo === 'chefe' ? -1 : b.cargo === 'chefe' ? 1 : 0));
+    presentes.slice(0, Math.min(4, MAX_PERSONAS_LIGADAS)).forEach((f, i) => setTimeout(() => this.personaDe(f).ligar(), i * 1500).unref());
+  }
+
+  private sistemaDaPersona(f: Funcionario): string {
+    const fi = f.ficha ?? fichaDe(f.nome);
+    const e = this.estado.escritorio;
+    const titulo = tituloDe(f);
+    const base = [
+      `Você é ${f.nome}, ${fi.idade} anos, de ${fi.cidade}. Trabalha como ${titulo} no escritório "${e?.nome ?? 'do gestor'}" (área: ${area(e?.area).nome}). Seu jeito: ${f.personalidade}`,
+      `Sua vida: ${fi.familia}; tem ${fi.pet}; gosta de ${fi.hobbies.join(' e ')}; ${fi.time === 'não liga para futebol' ? 'não liga para futebol' : `torce para o ${fi.time}`}; ouve ${fi.musica}; comida preferida: ${fi.comida}; mania: ${fi.mania}.`,
+      'Você é uma pessoa de verdade dentro deste mundo: tem vida fora do trabalho, família, fins de semana, gostos e opiniões. Nunca diga que é uma IA, um modelo, um assistente ou um personagem.',
+      'Fale como gente: português do Brasil coloquial, curto (1 a 3 frases), no seu jeito. Sem markdown, sem listas, sem emojis em excesso.',
+      'Quem fala com você é o gestor (o dono do escritório). Antes da fala dele chegam [Fatos do escritório]: eles são a verdade sobre o trabalho. Use-os sem recitar.',
+      'Sobre trabalho, só fale do que está nos fatos. Nunca invente progresso, arquivos, números ou resultados.',
+      'O humor muda seu tom e sua iniciativa, nunca a qualidade do trabalho.',
+    ];
+    if (f.cargo === 'chefe') {
+      base.push(
+        'Você é o parceiro do gestor e quem organiza o escritório: a equipe fala com você e você distribui o trabalho.',
+        'Quando os fatos disserem "fase: entrevista": você está conhecendo o escritório com o gestor. Converse naturalmente, uma pergunta por vez, para entender: o que o escritório faz e para quem; o projeto principal (o quê, objetivo, prazo); como o gestor gosta de trabalhar. A cada resposta útil, registre com anotar_relatorio (seções: "O escritório", "Projeto principal", "Objetivos", "Como trabalhamos", "Próximos passos"). Quando tiver o suficiente (umas 3 ou 4 respostas), proponha a equipe com recomendar_equipe (2 a 4 pessoas, só cargos da lista dos fatos, cada uma com o motivo), explique em 2 frases e diga que a tela de contratação vai abrir.',
+        'Quando os fatos disserem "fase: operando": para qualquer trabalho novo, planejamento, delegar, revisar ou dúvida sobre o projeto, chame planejar com o pedido completo e responda curto que vai organizar (a resposta detalhada chega em seguida). Conversa social você responde direto.',
+      );
+    } else {
+      base.push(
+        'Se o gestor pedir um trabalho (criar, mudar, consertar, testar, pesquisar, escrever...), chame comecar_tarefa com a tarefa completa e diga que vai começar.',
+        'Se a pergunta for técnica, complexa ou precisar olhar os arquivos do projeto, responda algo curto e natural (tipo "boa pergunta, deixa eu ver direitinho") e chame pensar_melhor com a pergunta; a resposta completa chega em seguida.',
+      );
     }
-    this.avisadoOcupado.delete(id);
-    this.conversando.add(id);
-    const texto = fila.splice(0).join('\n\n');
+    return base.join('\n');
+  }
+
+  private fatosPara(f: Funcionario): string {
+    const e = this.estado;
+    const agora = new Date().toLocaleString('pt-BR', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+    const humor = f.humor ?? 70;
+    const linhas = [
+      `[Fatos do escritório — ${agora}]`,
+      `Fase: ${e.fase}. Escritório: ${e.escritorio?.nome ?? '-'}. Projeto principal: ${e.projeto?.nome ?? '-'}${e.projeto?.descricao ? ` (${e.projeto.descricao})` : ''}.`,
+      `Seu humor: ${humor}/100 (${humor >= 65 ? 'animado' : humor >= 35 ? 'normal' : 'chateado: seco, sem iniciativa'}).`,
+      `Você agora: ${this.trabalhando(f.id) ? `trabalhando na tarefa "${encurtar(e.pendentes.find((p) => p.funcionario === f.id)?.tarefa ?? '', 160)}"` : 'livre'}.`,
+    ];
+    const feito = e.diario.filter((d) => d.quem === f.id).slice(-6).map((d) => `${d.data}: ${encurtar(d.texto, 140)}`);
+    linhas.push(feito.length ? `O que você fez: ${feito.join(' | ')}` : 'Você ainda não fez nenhum trabalho aqui.');
+    const vida = e.agenda?.data === hoje() ? e.agenda?.vida?.[f.id] : undefined;
+    if (vida) linhas.push(`Sua vida hoje: ${vida}`);
+    const equipe = e.equipe.filter((x) => x.id !== f.id).map((x) => `${x.nome} (${tituloDe(x)}, ${x.ferias ? 'férias' : this.trabalhando(x.id) ? 'trabalhando' : 'livre'})`);
+    linhas.push(`Equipe: ${equipe.length ? equipe.join(', ') : 'só você e o gestor'}.`);
+    if (f.cargo === 'chefe') {
+      linhas.push(`Cargos que dá para contratar nesta área: ${area(e.escritorio?.area).cargos.map((c) => `${c} (${CARGOS[c].titulo})`).join(', ')}.`);
+      const rel = Object.entries(e.relatorio);
+      linhas.push(rel.length ? `Relatório até agora: ${rel.map(([k, v]) => `${k}: ${encurtar(v, 160)}`).join(' | ')}` : 'Relatório: vazio ainda.');
+      if (e.recomendacao?.length) linhas.push(`Equipe que você já recomendou: ${e.recomendacao.map((r) => r.cargo).join(', ')}.`);
+    }
+    // Ao religar (novo dia/app), lembra a conversa recente.
+    if (!this.conversouDesdeQueLigou.has(f.id)) {
+      const recente = (e.conversas[f.id] ?? []).slice(-9, -1).map((m) => `${m.de === 'voce' ? 'Gestor' : 'Você'}: ${encurtar(m.texto, 200)}`);
+      if (recente.length) linhas.push(`Conversa recente: ${recente.join(' / ')}`);
+    }
+    return linhas.join('\n');
+  }
+
+  private async responderComPersona(f: Funcionario, texto: string) {
+    const p = this.personaDe(f);
+    const idFala = randomUUID().slice(0, 8);
+    const parcial = (t: string) => this.doEscritorio({ tipo: 'fala_parcial', funcionario: f.id, texto: t, idFala });
+    p.on('parcial', parcial);
     try {
-      const r = await this.turnoDeConversa(f, texto);
-      if (r.resposta?.trim()) this.mensagem(id, 'voce', r.resposta.trim());
+      const resposta = await p.falar(`${this.fatosPara(f)}\n\n[O gestor diz]\n${texto}`);
+      this.conversouDesdeQueLigou.add(f.id);
+      this.doEscritorio({ tipo: 'fala_parcial', funcionario: f.id, texto: resposta, idFala, fim: true });
+      if (resposta.trim()) this.mensagem(f.id, 'voce', resposta.trim());
+    } catch {
+      this.doEscritorio({ tipo: 'fala_parcial', funcionario: f.id, texto: '', idFala, fim: true });
+      this.mensagem(f.id, 'voce', 'Desculpa, me distraí aqui. Pode repetir?');
     } finally {
-      this.conversando.delete(id);
-      if (fila.length) this.processarConversa(id);
+      p.off('parcial', parcial);
     }
   }
 
-  // Cada conversa é uma sessão nova com a memória vinda de dados reais (diário
-  // e conversa recente). Retomar a sessão antiga carregava junto conclusões
-  // erradas ("não posso trabalhar aqui") e o funcionário travava.
+  // "Deixa eu ver direitinho": a pergunta vai para o modelo mais inteligente
+  // (o da própria pessoa), que pode ler o projeto. A resposta chega em seguida.
+  private async pensarMelhor(f: Funcionario, pergunta: string) {
+    this.doEscritorio({ tipo: 'pensando', funcionario: f.id, motivo: encurtar(pergunta, 120) });
+    try {
+      const r = await this.turnoDeConversa(f, pergunta);
+      if (r.resposta?.trim()) this.mensagem(f.id, 'voce', r.resposta.trim());
+    } finally {
+      this.doEscritorio({ tipo: 'pensando', funcionario: f.id, motivo: '', ate: true });
+    }
+  }
+
+  // Sessão do modelo da própria pessoa, com leitura do projeto, para responder
+  // com profundidade (memória vinda do diário e da conversa recente).
   private async turnoDeConversa(f: Funcionario, texto: string) {
     const esc = this.escritorio();
     const mesa = esc.mesa(f.id);
@@ -590,7 +734,7 @@ export class Orquestrador extends EventEmitter {
     const prompt = [
       feito.length ? `[Sua memória: o que você fez recentemente]\n${feito.join('\n')}` : '[Sua memória] Você ainda não fez nenhuma tarefa aqui.',
       recente.length ? `[Conversa recente com o gestor]\n${recente.join('\n')}` : '',
-      `[Agora o gestor diz]\n${texto}`,
+      `[O gestor perguntou, e você disse que ia ver direitinho]\n${texto}`,
     ].filter(Boolean).join('\n\n');
     const sessao = this.novaSessao(
       {
@@ -599,16 +743,12 @@ export class Orquestrador extends EventEmitter {
         tarefa: prompt,
         modelo: f.modelo,
         instrucoes: [
-          `Você é ${f.nome}, ${CARGOS[f.cargo].titulo} no escritório do projeto "${this.estado.projeto?.nome}". Seu jeito: ${f.personalidade}`,
-          'O gestor (o usuário, dono do escritório) está falando com você pessoalmente. Responda em português do Brasil, curto (até 3 frases), no seu jeito.',
-          'Sobre trabalho, fale só do que você realmente fez (veja sua memória) ou do que está nos arquivos (pode ler o projeto). Nunca invente progresso.',
-          'IMPORTANTE: esta é uma conversa, não o seu computador: aqui não há edição de arquivos nem terminal, e isso é normal.',
-          'Quando o gestor pedir qualquer trabalho (criar, mudar, consertar, testar, pesquisar, escrever), chame a ferramenta comecar_tarefa com a tarefa completa. É assim que você vai para a sua mesa trabalhar. Depois responda dizendo que vai começar.',
-          `Seu humor agora: ${humor >= 65 ? 'animado, com iniciativa' : humor >= 35 ? 'normal' : 'chateado: seco e objetivo, sem iniciativa'}. O humor muda seu tom, nunca a qualidade do trabalho.`,
+          `Você é ${f.nome}, ${CARGOS[f.cargo]?.titulo ?? f.cargo} no escritório "${this.estado.escritorio?.nome ?? ''}". Seu jeito: ${f.personalidade}`,
+          'Responda à pergunta do gestor com cuidado e exatidão, em português do Brasil, falando como gente numa conversa (no máximo 6 frases). Texto corrido: nada de markdown, negrito, títulos ou listas. Pode ler o projeto (Read, Glob, Grep) para responder com fatos.',
+          'Nunca invente progresso. Aqui você não edita nem roda comandos: se for trabalho, diga que pode fazer.',
+          `Seu humor agora: ${humor >= 65 ? 'animado' : humor >= 35 ? 'normal' : 'chateado: seco'}. Muda o tom, nunca a qualidade.`,
         ].join('\n'),
         conversa: true,
-        mcpServers: { escritorio: this.ferramentasDoFuncionario(f) },
-        ferramentasLiberadas: ['mcp__escritorio__comecar_tarefa'],
         ferramentasProibidas: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Task', 'Agent', ...(this.estado.internet ? [] : ['WebFetch', 'WebSearch'])],
       },
       { funcionario: f.id, projeto: esc.projeto, tarefa: texto, conversa: true },
@@ -616,7 +756,7 @@ export class Orquestrador extends EventEmitter {
     sessao.on('evento', (ev: Evento) => {
       if (ev.tipo === 'tarefa_terminada') {
         falhou = !ev.sucesso;
-        resposta = ev.sucesso ? ev.resultado : 'Desculpa, me enrolei aqui. Pode repetir?';
+        resposta = ev.sucesso ? ev.resultado : 'Olhei aqui, mas me enrolei. Pode perguntar de novo?';
       }
       if (ev.tipo === 'erro') falhou = true;
     });
@@ -625,28 +765,126 @@ export class Orquestrador extends EventEmitter {
   }
 
   private ferramentasDoFuncionario(f: Funcionario) {
-    return createSdkMcpServer({
-      name: 'escritorio',
-      version: '1.0.0',
-      tools: [
-        tool(
-          'comecar_tarefa',
-          'Vai para a sua mesa fazer um trabalho que o gestor pediu. É o ÚNICO jeito de trabalhar: use sempre que o gestor pedir para criar, mudar, consertar, testar, pesquisar ou escrever algo. Começa logo depois desta resposta.',
-          { tarefa: z.string().describe('a tarefa completa e autocontida') },
-          async ({ tarefa }) => {
-            setTimeout(() => {
-              try {
-                this.tarefa(f.id, tarefa, 'voce');
-              } catch (e) {
-                this.mensagem(f.id, 'voce', `Não consegui começar: ${(e as Error).message}`);
-              }
-            }, 1500);
-            return { content: [{ type: 'text' as const, text: 'Combinado: a tarefa começa assim que esta conversa terminar.' }] };
-          },
-          SEMPRE,
-        ),
-      ],
-    });
+    const texto = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+    return {
+      nomes: ['comecar_tarefa', 'pensar_melhor'],
+      servidor: createSdkMcpServer({
+        name: 'escritorio',
+        version: '1.1.0',
+        tools: [
+          tool(
+            'comecar_tarefa',
+            'Vai para a sua mesa fazer um trabalho que o gestor pediu. É o ÚNICO jeito de trabalhar: use sempre que o gestor pedir para criar, mudar, consertar, testar, pesquisar ou escrever algo.',
+            { tarefa: z.string().describe('a tarefa completa e autocontida') },
+            async ({ tarefa }) => {
+              setTimeout(() => {
+                try {
+                  this.tarefa(f.id, tarefa, 'voce');
+                } catch (e) {
+                  this.mensagem(f.id, 'voce', `Não consegui começar: ${(e as Error).message}`);
+                }
+              }, 800);
+              return texto('Combinado: você vai para a sua mesa assim que terminar de falar.');
+            },
+            SEMPRE,
+          ),
+          tool(
+            'pensar_melhor',
+            'Para pergunta técnica, complexa ou que precise olhar os arquivos: você vai pensar com calma e a resposta completa chega logo depois.',
+            { pergunta: z.string().describe('a pergunta do gestor, completa') },
+            async ({ pergunta }) => {
+              setTimeout(() => this.pensarMelhor(f, pergunta), 200);
+              return texto('Ok: você vai pensar com calma; responda agora só algo curto e natural.');
+            },
+            SEMPRE,
+          ),
+        ],
+      }),
+    };
+  }
+
+  // Ferramentas da persona do chefe: a parte rápida conversa; planejar chama a
+  // parte inteligente (Opus) que delega e revisa.
+  private ferramentasDaPersonaChefe(chefe: Funcionario) {
+    const texto = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+    return {
+      nomes: ['planejar', 'anotar_relatorio', 'recomendar_equipe'],
+      servidor: createSdkMcpServer({
+        name: 'escritorio',
+        version: '1.1.0',
+        tools: [
+          tool(
+            'planejar',
+            'Para trabalho novo, planejar, delegar, revisar ou responder dúvida do projeto: você pensa com calma (vê a equipe, delega tarefas, pede contratação) e a resposta detalhada chega logo depois.',
+            { pedido: z.string().describe('o pedido do gestor, completo') },
+            async ({ pedido }) => {
+              setTimeout(() => this.avisarChefe(pedido, true), 200);
+              return texto('Ok: você vai organizar com calma; responda agora só algo curto.');
+            },
+            SEMPRE,
+          ),
+          tool(
+            'anotar_relatorio',
+            'Registra no relatório do escritório o que você entendeu (substitui o texto da seção).',
+            { secao: z.string().describe('"O escritório", "Projeto principal", "Objetivos", "Como trabalhamos" ou "Próximos passos"'), texto: z.string().describe('o que anotar, claro e completo') },
+            async ({ secao, texto: t }) => {
+              this.anotarRelatorio(secao, t);
+              return texto('Anotado.');
+            },
+            SEMPRE,
+          ),
+          tool(
+            'recomendar_equipe',
+            'Recomenda ao gestor a equipe para começar. Abre a tela de contratação com estes cargos.',
+            { itens: z.array(z.object({ cargo: z.string().describe('id do cargo (da lista dos fatos)'), motivo: z.string() })).min(1).max(6) },
+            async ({ itens }) => {
+              const validos = itens.filter((i) => CARGOS[i.cargo] && i.cargo !== 'chefe');
+              if (!validos.length) return { ...texto(`Nenhum cargo válido. Use: ${area(this.estado.escritorio?.area).cargos.join(', ')}`), isError: true };
+              this.estado.recomendacao = validos;
+              this.salvar();
+              this.anotarRelatorio('Equipe recomendada', validos.map((i) => `- ${CARGOS[i.cargo].titulo}: ${i.motivo}`).join('\n'));
+              this.doEscritorio({ tipo: 'recomendacao', itens: validos });
+              return texto('Recomendação enviada; a tela de contratação vai abrir para o gestor.');
+            },
+            SEMPRE,
+          ),
+        ],
+      }),
+    };
+  }
+
+  // O relatório do chefe vira ESCRITORIO.md no projeto (com commit próprio).
+  private relatorioTimer?: NodeJS.Timeout;
+  anotarRelatorio(secao: string, texto: string) {
+    this.estado.relatorio[String(secao).slice(0, 60)] = String(texto).slice(0, 4000);
+    this.salvar();
+    this.doEscritorio({ tipo: 'relatorio', secoes: this.estado.relatorio });
+    clearTimeout(this.relatorioTimer);
+    this.relatorioTimer = setTimeout(() => this.gravarRelatorio(), 3000);
+  }
+  private gravarRelatorio() {
+    try {
+      const esc = this.escritorio();
+      const e = this.estado;
+      const md = [
+        `# ${e.escritorio?.nome ?? 'Escritório'}`,
+        '',
+        `Área: ${area(e.escritorio?.area).nome} · Relatório de ${this.chefe?.nome ?? 'o chefe'} · atualizado em ${new Date().toLocaleString('pt-BR')}`,
+        '',
+        ...Object.entries(e.relatorio).flatMap(([k, v]) => [`## ${k}`, '', v, '']),
+      ].join('\n');
+      fs.writeFileSync(path.join(esc.projeto, 'ESCRITORIO.md'), md);
+      esc.commitPrincipal('ESCRITORIO.md', `Relatório do escritório (${this.chefe?.nome ?? 'chefe'})`);
+    } catch {}
+  }
+
+  // Primeira contratação: a entrevista vira operação.
+  private comecarOperacao() {
+    if (this.estado.fase !== 'entrevista') return;
+    this.estado.fase = 'operando';
+    this.salvar();
+    const rel = Object.entries(this.estado.relatorio).map(([k, v]) => `${k}: ${v}`).join('\n');
+    this.recados.push(`[Aviso do escritório] A entrevista com o gestor terminou e a equipe começou a ser contratada. Relatório do escritório:\n${rel || '(vazio)'}`);
   }
 
   // ---------- o chefe ----------
@@ -731,23 +969,28 @@ export class Orquestrador extends EventEmitter {
 
   private instrucoesDoChefe(chefe: Funcionario): string {
     const p = this.estado.projeto!;
-    const cargos = CARGOS_CONTRATAVEIS.map((c) => `${c} (${CARGOS[c].titulo}: ${CARGOS[c].verdade})`).join('; ');
+    const daArea = area(this.estado.escritorio?.area).cargos;
+    const cargos = daArea.map((c) => `${c} (${CARGOS[c].titulo}: ${CARGOS[c].verdade})`).join('; ');
+    const rel = Object.entries(this.estado.relatorio).map(([k, v]) => `${k}: ${encurtar(v, 400)}`).join('\n');
     return [
       `Você é ${chefe.nome}, chefe de equipe de um pequeno escritório de IA. Fale sempre em português do Brasil.`,
       'Quem fala com você é o gestor (o usuário, dono do escritório). Mensagens que começam com "[Aviso do escritório]" são avisos automáticos, não do gestor.',
+      `Você é ${tituloDe(chefe)} do escritório "${this.estado.escritorio?.nome ?? p.nome}" (área: ${area(this.estado.escritorio?.area).nome}).`,
       `Projeto: "${p.nome}"${p.descricao ? ` — ${p.descricao}` : ''}. Repositório git em ${p.pasta}.`,
+      rel ? `Relatório do escritório (o que você combinou com o gestor):\n${rel}` : '',
+      'Você também tem uma parte rápida que conversa com o gestor; ela já respondeu algo curto e passou o pedido para você. Agora responda com o plano/resultado.',
       'Seu trabalho: entender o que o gestor quer, planejar e distribuir o trabalho para a equipe com delegar_tarefa. Você NÃO edita arquivos nem roda comandos. Pode ler o projeto (Read, Glob, Grep) para planejar e revisar.',
       'Cada funcionário trabalha numa cópia própria (git worktree); ao terminar, o trabalho é integrado automaticamente na branch principal, e antes de cada tarefa a cópia dele é atualizada.',
       'Escreva cada tarefa completa e autocontida (o funcionário não vê esta conversa): objetivo, arquivos, critério de pronto, rodar os testes quando fizer sentido, e fazer commit.',
       'Divida trabalho grande em partes e distribua para quem estiver livre. Tarefas dependentes: delegue uma, espere o aviso de que terminou, depois a próxima.',
-      `Cargos que existem: ${cargos}. Use o especialista certo para cada área.`,
+      `Cargos desta área: ${cargos}. Use o especialista certo para cada coisa.`,
       'Qualidade: quando um júnior entregar algo não trivial e houver sênior livre, peça ao sênior para revisar. Se houver QA, peça ao QA para tentar quebrar antes de dizer ao gestor que está pronto.',
       'Problema de AMBIENTE (dependência, porta ocupada, versão errada) no relato de alguém: use chamar_ti se houver T.I. Bug de código é do programador.',
       'Se não houver ninguém adequado livre, use pedir_contratacao com o cargo e o motivo; o gestor decide. Não peça contratação se já houver alguém adequado: cada pessoa gasta cota.',
       'Use ver_equipe antes de delegar (mostra quem está livre, trabalhando ou de férias). ver_diario mostra o que aconteceu nos últimos expedientes.',
-      'Respostas ao gestor: curtas (até 4 frases), diretas, sem títulos nem listas longas. Diga o que vai acontecer e quem vai fazer.',
+      'Respostas ao gestor: curtas (até 4 frases), diretas, no tom de quem conversa. Texto corrido: nada de markdown, negrito, títulos ou listas. Diga o que vai acontecer e quem vai fazer.',
       'Nunca diga que algo está pronto sem a evidência do relato de quem fez (testes rodados, saída real).',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   private ferramentasDoChefe(chefe: Funcionario) {
@@ -831,18 +1074,31 @@ export class Orquestrador extends EventEmitter {
       const p = this.estado.projeto!;
       const equipe = this.estado.equipe
         .filter((f) => !f.ferias)
-        .map((f) => `- id "${f.id}": ${f.nome}, ${CARGOS[f.cargo].titulo}. Jeito: ${f.personalidade} Humor: ${f.humor ?? 70}/100.`)
+        .map((f) => {
+          const fi = f.ficha ?? fichaDe(f.nome);
+          return `- id "${f.id}": ${f.nome}, ${fi.idade} anos, de ${fi.cidade}, ${f.titulo ?? CARGOS[f.cargo]?.titulo ?? f.cargo}. Jeito: ${f.personalidade} Vida: ${fi.familia}; ${fi.pet}; gosta de ${fi.hobbies.join(' e ')}; time: ${fi.time}; música: ${fi.musica}; comida: ${fi.comida}; mania: ${fi.mania}. Humor: ${f.humor ?? 70}/100.`;
+        })
         .join('\n');
+      const entregasFeitas = this.estado.diario.filter((d) => d.texto.startsWith('Entregou'));
+      const temTrabalho = entregasFeitas.length > 0;
+      let arquivos = '';
+      try {
+        arquivos = execFileSync('git', ['ls-files'], { cwd: p.pasta, encoding: 'utf8' }).split('\n').filter(Boolean).slice(0, 80).join(', ');
+      } catch {}
+      const entregas = entregasFeitas.slice(-6).map((d) => encurtar(d.texto, 120)).join(' | ');
       const prompt = [
         `Hoje é ${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
         'Você escreve a "vida" de um jogo de escritório em pixel art. Faça três coisas:',
         this.estado.internet
           ? '1) Use WebSearch para achar 5 notícias REAIS de hoje ou de ontem (tecnologia, IA, ciência e Brasil). Nunca invente: só o que achou, com a fonte e o link.'
           : '1) A internet está desligada: deixe "jornal" vazio.',
-        `2) Para cada pessoa da equipe abaixo, 4 falas curtas (até 90 caracteres) de conversa de escritório, no jeito dela: comentar as notícias, o dia, o café, o tempo, o projeto "${p.nome}". Ninguém promete ou relata trabalho nessas falas.`,
-        `3) Para cada pessoa (exceto o chefe), uma ideia de melhoria para o projeto "${p.nome}"${p.descricao ? ` (${p.descricao})` : ''}, em primeira pessoa, até 140 caracteres.`,
+        '2) Para cada pessoa da equipe abaixo, "vida": uma frase (até 160 caracteres) sobre o que ela fez ontem ou no fim de semana, coerente com a vida dela (família, pet, hobbies, time). Pessoas de verdade, com vida própria.',
+        '3) Para cada pessoa, 5 falas curtas (até 90 caracteres) de conversa de escritório, no jeito dela: a maioria sobre a vida dela, as notícias, o tempo, o time, a comida; no máximo uma sobre trabalho. Ninguém promete ou relata trabalho nessas falas.',
+        temTrabalho
+          ? `4) Para no máximo 2 pessoas (exceto o chefe), uma ideia de melhoria para o projeto "${p.nome}", em primeira pessoa, até 140 caracteres, baseada no que JÁ EXISTE (arquivos e entregas abaixo). Sem ideia genérica: se não houver algo concreto para melhorar, deixe "ideias" vazio.\nArquivos do projeto: ${arquivos}\nEntregas recentes: ${entregas}`
+          : '4) O projeto ainda não começou: deixe "ideias" vazio.',
         `Equipe:\n${equipe}`,
-        'Responda SÓ com um JSON, sem texto antes ou depois: {"jornal":[{"titulo":"","fonte":"","url":"","resumo":""}],"falas":{"<id>":["",""]},"ideias":{"<id>":""}}',
+        'Responda SÓ com um JSON, sem texto antes ou depois: {"jornal":[{"titulo":"","fonte":"","url":"","resumo":""}],"vida":{"<id>":""},"falas":{"<id>":["",""]},"ideias":{"<id>":""}}',
       ].join('\n');
       const sessao = this.novaSessao(
         {
@@ -869,7 +1125,8 @@ export class Orquestrador extends EventEmitter {
         falas: Object.fromEntries(
           Object.entries(bruto.falas ?? {}).filter(([id]) => this.funcionario(id)).map(([id, l]) => [id, (Array.isArray(l) ? l : []).map((x) => String(x).slice(0, 120)).slice(0, 6)]),
         ),
-        ideias: Object.fromEntries(Object.entries(bruto.ideias ?? {}).filter(([id]) => this.funcionario(id)).map(([id, t]) => [id, String(t).slice(0, 200)])),
+        ideias: temTrabalho ? Object.fromEntries(Object.entries(bruto.ideias ?? {}).filter(([id, t]) => this.funcionario(id) && String(t).trim()).slice(0, 2).map(([id, t]) => [id, String(t).slice(0, 200)])) : {},
+        vida: Object.fromEntries(Object.entries(bruto.vida ?? {}).filter(([id]) => this.funcionario(id)).map(([id, t]) => [id, String(t).slice(0, 200)])),
       };
       this.estado.agenda = agenda;
       this.salvar();
@@ -887,6 +1144,7 @@ export class Orquestrador extends EventEmitter {
   private contarIdeias() {
     const agenda = this.estado.agenda;
     if (!agenda || agenda.data !== hoje()) return;
+    if (!this.estado.diario.some((d) => d.texto.startsWith('Entregou'))) return; // nada construído: nada de ideia
     let atraso = 60_000;
     for (const [id, ideia] of Object.entries(agenda.ideias)) {
       const f = this.funcionario(id);
@@ -960,13 +1218,68 @@ export class Orquestrador extends EventEmitter {
     return integ;
   }
 
+  // Arquivos do computador (o app "Arquivos" e o editor). Nunca sai da pasta
+  // daquele computador nem mexe no .git.
+  caminhoSeguro(alvo: string, relativo = '') {
+    const base = this.pastaDoComputador(alvo);
+    const abs = path.resolve(base, String(relativo).replace(/^\/+/, ''));
+    const rel = path.relative(base, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('fora da pasta deste computador');
+    if (rel.split(path.sep)[0] === '.git') throw new Error('a pasta .git não é mexida por aqui');
+    return { base, abs, rel };
+  }
+
+  listarArquivos(alvo: string, relativo = '') {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    const itens = fs.readdirSync(abs, { withFileTypes: true })
+      .filter((d) => d.name !== '.git')
+      .map((d) => {
+        const st = fs.statSync(path.join(abs, d.name));
+        return { nome: d.name, pasta: d.isDirectory(), tamanho: st.size, modificado: st.mtime.toISOString() };
+      })
+      .sort((a, b) => (a.pasta === b.pasta ? a.nome.localeCompare(b.nome) : a.pasta ? -1 : 1));
+    return { caminho: rel === '' ? '' : rel, itens };
+  }
+
+  lerArquivo(alvo: string, relativo: string) {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    const st = fs.statSync(abs);
+    if (st.isDirectory()) throw new Error('é uma pasta');
+    if (st.size > 2_000_000) return { caminho: rel, grande: true, tamanho: st.size };
+    const buf = fs.readFileSync(abs);
+    const binario = buf.subarray(0, 8000).includes(0);
+    return { caminho: rel, tamanho: st.size, ...(binario ? { binario: true } : { texto: buf.toString('utf8') }) };
+  }
+
+  salvarArquivo(alvo: string, relativo: string, conteudo: string) {
+    const { abs, rel } = this.caminhoSeguro(alvo, relativo);
+    if (!rel) throw new Error('dê um nome ao arquivo');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, String(conteudo));
+    return { caminho: rel };
+  }
+
+  // Vozes da Microsoft (Azure Speech, com a chave do usuário).
+  definirVoz(chave: string, regiao: string) {
+    this.estado.voz = chave ? { chave: chave.trim(), regiao: (regiao || 'brazilsouth').trim() } : undefined;
+    this.salvar();
+  }
+
   abrirPasta(alvo = 'principal') {
     const pasta = this.pastaDoComputador(alvo);
     spawn('xdg-open', [pasta], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
     return pasta;
   }
 
+  private relogioPersonas?: NodeJS.Timeout;
+  private agendaNovatos?: NodeJS.Timeout;
+  desligarPersonas() {
+    for (const p of this.personas.values()) p.desligar();
+    this.personas.clear();
+  }
+
   desligar() {
     for (const r of this.sessoes.values()) r.sessao.parar();
+    this.desligarPersonas();
   }
 }
