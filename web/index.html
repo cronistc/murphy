@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escritório Pixel</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  :root {
+    --fundo: #17141c; --painel: #221e29; --painel2: #2b2633; --borda: #3a3344;
+    --texto: #ece6f2; --suave: #a39cae; --destaque: #f2b84b; --ok: #5fc27e; --perigo: #e5675f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--fundo); color: var(--texto);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; min-height: 100vh; }
+  #palco { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; gap: 8px; position: relative; }
+  #hud { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  #tela { image-rendering: pixelated; border-radius: 6px; box-shadow: 0 10px 40px #0008; max-width: 100%; outline: none; }
+  #tela:focus-visible { box-shadow: 0 0 0 2px var(--destaque), 0 10px 40px #0008; }
+  #dica { color: var(--suave); font-size: 12px; text-align: center; min-height: 1.4em; }
+  #dica kbd { background: var(--painel2); border: 1px solid var(--borda); border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
+  aside { width: 390px; flex-shrink: 0; background: var(--painel); border-left: 1px solid var(--borda); overflow-y: auto; height: 100vh; position: sticky; top: 0; }
+  section { padding: 14px 16px; border-bottom: 1px solid var(--borda); }
+  h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--suave); margin: 0 0 10px; }
+  .pilula { font-size: 11.5px; padding: 3px 9px; border-radius: 99px; background: var(--painel2); color: var(--suave); border: 1px solid var(--borda); }
+  .pilula.on { color: var(--ok); } .pilula.off { color: var(--perigo); } .pilula.aviso { color: var(--destaque); }
+  button.pilula { cursor: pointer; font-weight: 500; }
+  #projetoNome { color: var(--suave); font-size: 12px; margin-top: 4px; word-break: break-all; }
+  label { display: block; font-size: 12px; color: var(--suave); margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; background: var(--fundo); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 8px 10px; font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  .linha { display: flex; gap: 8px; align-items: center; } .linha > * { flex: 1; }
+  button { background: var(--destaque); color: #241a05; border: 0; border-radius: 6px; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.neutro { background: var(--painel2); color: var(--texto); border: 1px solid var(--borda); font-weight: 500; }
+  button.perigo { background: transparent; color: var(--perigo); border: 1px solid var(--perigo); font-weight: 500; }
+  button.pequeno { padding: 4px 9px; font-size: 12px; }
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--texto); margin: 8px 0; }
+  .chk input { width: auto; }
+  .erro { color: var(--perigo); font-size: 12px; margin-top: 6px; min-height: 1em; }
+  .vazio { color: var(--suave); font-size: 12px; }
+  .ponto { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; flex: none; }
+
+  .pedido { background: var(--painel2); border: 1px solid var(--destaque); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .pedido code { display: block; margin: 6px 0 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--suave); }
+  .pedido p { margin: 6px 0 8px; color: var(--suave); font-size: 13px; }
+
+  #falarCom { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  #falarCom select { flex: 1; }
+  #modoConversa { font-size: 11px; color: var(--suave); white-space: nowrap; }
+  #chat { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .msg { padding: 8px 10px; border-radius: 10px; max-width: 92%; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+  .msg .quem { display: block; font-size: 11px; color: var(--suave); margin-bottom: 2px; font-weight: 600; }
+  .msg.dele { background: var(--painel2); align-self: flex-start; border-top-left-radius: 2px; }
+  .msg.minha { background: #3d3320; align-self: flex-end; border-top-right-radius: 2px; }
+  .pensando { color: var(--suave); font-size: 12px; font-style: italic; }
+  #formFala { display: flex; gap: 8px; align-items: flex-end; }
+  #formFala textarea { min-height: 44px; }
+
+  .membro { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  .membro:hover, .membro.sel { background: var(--painel2); }
+  .membro .info { flex: 1; min-width: 0; }
+  .membro .nome { font-weight: 600; }
+  .membro .det { font-size: 12px; color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .membro.ferias { opacity: .55; }
+  .humorbarra { height: 4px; background: var(--borda); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+  .humorbarra > div { height: 100%; }
+  #btnContratar { width: 100%; margin-top: 8px; }
+
+  #ficha .topo { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #ficha .nome { font-weight: 700; font-size: 15px; }
+  #ficha dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; margin: 8px 0; }
+  #ficha dt { color: var(--suave); } #ficha dd { margin: 0; word-break: break-word; }
+  #ficha details { margin: 8px 0; }
+  #ficha summary { cursor: pointer; color: var(--suave); font-size: 12px; }
+  #ficha .acoes { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  #ficha .feed { max-height: 300px; overflow-y: auto; }
+
+  .feed { font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .feed details { border-bottom: 1px dashed var(--borda); padding: 3px 0; }
+  .feed summary { cursor: pointer; list-style: none; word-break: break-word; }
+  .feed summary::-webkit-details-marker { display: none; }
+  .feed pre { white-space: pre-wrap; word-break: break-all; background: var(--fundo); padding: 6px; border-radius: 4px; margin: 4px 0; color: var(--suave); }
+  .hora { color: var(--suave); }
+  #atividade > details > summary { cursor: pointer; color: var(--suave); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  #atividade .feed { max-height: 260px; overflow-y: auto; margin-top: 8px; }
+
+  .sobre { position: fixed; inset: 0; background: #17141cdd; display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .sobre[hidden] { display: none; }
+  .cartao { background: var(--painel); border: 1px solid var(--borda); border-radius: 12px; padding: 22px; max-width: 460px; width: 100%; max-height: 92vh; overflow-y: auto; }
+  .cartao.largo { max-width: 860px; }
+  .cartao h1 { font-size: 20px; margin-bottom: 8px; }
+  .cartao p { color: var(--suave); margin: 8px 0; }
+  .cartao .grande { width: 100%; margin-top: 14px; padding: 11px; }
+  .cartao a { color: var(--destaque); word-break: break-all; }
+  .cabecalho { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .cabecalho h1 { flex: 1; margin: 0; }
+  .conta { background: var(--painel2); border-radius: 8px; padding: 10px 12px; margin: 12px 0 0; }
+  .abas { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
+  .abas button { flex: 1 1 auto; }
+  .abas button.ativa { outline: 2px solid var(--destaque); }
+  .verdade { font-size: 13px; color: var(--suave); margin-bottom: 10px; }
+  .candidatos { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .candidato { background: var(--painel2); border: 1px solid var(--borda); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .candidato canvas { image-rendering: pixelated; width: 48px; height: 64px; }
+  .candidato .nome { font-weight: 700; font-size: 15px; }
+  .candidato .pers { font-size: 13px; color: var(--suave); flex: 1; }
+
+  #terminal { height: 60vh; min-height: 300px; background: #0f0d14; border-radius: 8px; padding: 6px; }
+  #telaFunc { height: 60vh; overflow-y: auto; background: #0f1a14; color: #c9f2d6; border-radius: 8px; padding: 10px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+  #telaFunc .cmd { color: #f2b84b; } #telaFunc .err { color: #ff8f86; } #telaFunc .txt { color: #e6f2ea; } #telaFunc .sis { color: #7fa38c; }
+  .lista { display: flex; flex-direction: column; gap: 6px; }
+  .item { background: var(--painel2); border: 1px solid var(--borda); border-radius: 8px; padding: 10px; }
+  .item .sub { color: var(--suave); font-size: 12px; }
+  .item pre { white-space: pre-wrap; font: 11.5px ui-monospace, monospace; color: var(--suave); max-height: 260px; overflow: auto; }
+  #fimDia { text-align: center; }
+  #fimDia .cartao { text-align: center; }
+  @media (max-width: 900px) {
+    body { flex-direction: column; }
+    aside { width: 100%; height: auto; position: static; border-left: 0; border-top: 1px solid var(--borda); }
+    #palco { padding: 8px; }
+  }
+</style>
+</head>
+<body>
+<main id="palco">
+  <div id="hud">
+    <span class="pilula" id="conexao">conectando…</span>
+    <span class="pilula" id="relogio"></span>
+    <span class="pilula" id="trabalhando">0 trabalhando</span>
+    <span class="pilula" id="temperatura" hidden></span>
+    <span class="pilula" id="cota" hidden></span>
+    <span class="pilula aviso" id="almoco" hidden></span>
+    <button class="pilula" id="btnSom" title="Vozes de quem está perto">🔊 som</button>
+    <button class="pilula" id="btnAjuda">❔ como jogar</button>
+    <button class="pilula" id="btnEncerrar" title="Cada um salva o trabalho e vai embora">🌙 encerrar o dia</button>
+  </div>
+  <canvas id="tela" width="512" height="288" tabindex="0" aria-label="Escritório. Use as setas ou WASD para andar e E para interagir."></canvas>
+  <div id="dica"></div>
+</main>
+<aside>
+  <section>
+    <h1>🏢 Escritório Pixel</h1>
+    <div id="projetoNome"></div>
+  </section>
+
+  <section id="secPedidos" hidden>
+    <h2>Pedidos na sua mesa</h2>
+    <div id="pedidos"></div>
+  </section>
+
+  <section>
+    <h2>Conversa</h2>
+    <div id="falarCom">
+      <select id="interlocutor" aria-label="Falar com"></select>
+      <span id="modoConversa"></span>
+    </div>
+    <div id="chat"></div>
+    <form id="formFala">
+      <textarea id="fMsg" placeholder="Fale… (Enter envia)" required></textarea>
+      <button type="submit">Enviar</button>
+    </form>
+    <div class="erro" id="erroChat"></div>
+  </section>
+
+  <section>
+    <h2>Equipe</h2>
+    <div id="equipe"></div>
+    <button class="neutro" id="btnContratar">+ Contratar alguém</button>
+  </section>
+
+  <section id="ficha" hidden></section>
+
+  <section id="atividade">
+    <details>
+      <summary>Bastidores (log técnico)</summary>
+      <label class="chk"><input type="checkbox" id="fAuto"> Aprovar pedidos de permissão automaticamente (nunca fora da pasta do projeto)</label>
+      <div class="linha" style="margin:6px 0"><button class="neutro pequeno" id="btnPasta">Abrir a pasta do projeto</button></div>
+      <div class="feed" id="feed"></div>
+    </details>
+  </section>
+</aside>
+
+<!-- primeira abertura -->
+<div id="boasvindas" class="sobre" hidden>
+  <div class="cartao">
+    <div id="bvConta">
+      <h1>🏢 Bem-vindo ao seu escritório</h1>
+      <p>Aqui você é o gestor. Seus funcionários de IA trabalham de verdade, usando a sua conta Claude (assinatura Pro ou Max).</p>
+      <div id="bvVerificando" class="vazio">Verificando sua conta…</div>
+      <div id="bvLogado" hidden>
+        <div class="conta">✅ Conta Claude conectada<span id="bvEmail"></span></div>
+        <button class="grande" id="bvContinuar">Continuar com esta conta</button>
+        <button class="grande neutro" id="bvOutra">Usar outra conta</button>
+      </div>
+      <div id="bvEntrar" hidden><button class="grande" id="btnEntrar">Entrar com a conta Claude</button></div>
+      <div id="bvCodigo" hidden>
+        <p>Abrimos o login no seu navegador. Se ele não abriu, <a id="loginLink" href="#" target="_blank" rel="noopener">clique aqui</a>.</p>
+        <p>Se o site mostrar um código, cole aqui:</p>
+        <form id="formCodigo"><input id="fCodigo" autocomplete="off" placeholder="código"><button class="grande" type="submit">Confirmar</button></form>
+      </div>
+      <div class="erro" id="loginErro"></div>
+    </div>
+    <form id="bvProjeto" hidden>
+      <h1>Seu primeiro projeto</h1>
+      <p>O que o escritório vai construir? Pode ser um app, um site, um texto, uma pesquisa… Dá para mudar depois conversando com o chefe.</p>
+      <label for="pNome">Nome do projeto</label>
+      <input id="pNome" required value="Meu primeiro projeto" autocomplete="off">
+      <label for="pDesc">Em uma frase, o que é (opcional)</label>
+      <textarea id="pDesc" placeholder="ex.: um site de receitas da minha avó"></textarea>
+      <details style="margin-top:10px">
+        <summary class="vazio" style="cursor:pointer">Avançado: usar uma pasta que já existe</summary>
+        <label for="pPasta">Pasta (vazia ou um repositório git)</label>
+        <input id="pPasta" autocomplete="off" placeholder="~/escritorio-projetos/<nome do projeto>">
+      </details>
+      <button class="grande" type="submit">Abrir o escritório</button>
+      <div class="erro" id="bvErro"></div>
+    </form>
+  </div>
+</div>
+
+<!-- contratação -->
+<div id="contratacao" class="sobre" hidden>
+  <div class="cartao largo">
+    <div class="cabecalho"><h1>Contratar</h1><button class="neutro" data-fechar>fechar</button></div>
+    <div class="abas" id="abas"></div>
+    <div class="verdade" id="verdade"></div>
+    <div class="candidatos" id="candidatos"></div>
+    <div class="erro" id="erroContratar"></div>
+  </div>
+</div>
+
+<!-- computador de verdade -->
+<div id="computador" class="sobre" hidden>
+  <div class="cartao largo" style="max-width:1000px">
+    <div class="cabecalho"><h1 id="compTitulo">Computador</h1>
+      <button class="neutro pequeno" id="compEntregar" hidden>Entregar meu trabalho</button>
+      <button class="neutro pequeno" id="compPasta">Abrir a pasta</button>
+      <button class="neutro" id="compLevantar">levantar</button></div>
+    <div class="vazio" id="compInfo" style="margin-bottom:8px"></div>
+    <div id="terminal"></div>
+    <div class="erro" id="compErro"></div>
+  </div>
+</div>
+
+<!-- a tela de um funcionário (ver o que ele está fazendo) -->
+<div id="telaDele" class="sobre" hidden>
+  <div class="cartao largo">
+    <div class="cabecalho"><h1 id="telaTitulo">Tela</h1><button class="neutro pequeno" id="telaSentar">sentar junto (terminal na mesa dele)</button><button class="neutro" data-fechar>fechar</button></div>
+    <div id="telaFunc"></div>
+  </div>
+</div>
+
+<!-- janela genérica: cofre, wi-fi, jornal, diário, ar-condicionado, ajuda -->
+<div id="janela" class="sobre" hidden>
+  <div class="cartao largo">
+    <div class="cabecalho"><h1 id="janTitulo"></h1><button class="neutro" data-fechar>fechar</button></div>
+    <div id="janCorpo"></div>
+  </div>
+</div>
+
+<!-- fim do expediente -->
+<div id="fimDia" class="sobre" hidden>
+  <div class="cartao">
+    <h1>🌙 Expediente encerrado</h1>
+    <p id="fimResumo"></p>
+    <p class="vazio">Pode fechar a janela. Amanhã a equipe continua de onde parou.</p>
+    <button class="grande" id="btnReabrir">Reabrir o escritório</button>
+  </div>
+</div>
+
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script type="module" src="jogo.js"></script>
+</body>
+</html>

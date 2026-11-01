@@ -19,6 +19,20 @@ const ICONE: Record<Evento['tipo'], string> = {
   compactacao: '🚻',
   tarefa_terminada: '🏁',
   erro: '❌',
+  mensagem: '🗨️',
+  equipe: '👥',
+  contratacao_pedida: '📋',
+  contratacao_respondida: '🤝',
+  tarefa_delegada: '📌',
+  integracao: '🔀',
+  expediente: '🏢',
+  humor: '🙂',
+  almoco: '🍽️',
+  agenda: '📰',
+  aniversario: '🎂',
+  maquina: '🌡️',
+  cofre: '🗄️',
+  config: '⚙️',
 };
 
 export function formatar(ev: Evento): string {
@@ -26,7 +40,7 @@ export function formatar(ev: Evento): string {
   let corpo: string;
   switch (ev.tipo) {
     case 'sessao_iniciada':
-      corpo = `modelo=${ev.modelo} pasta=${ev.pasta} tarefa="${encurtar(ev.tarefa, 80)}"`;
+      corpo = `${ev.funcionario ? `${ev.funcionario}${ev.branch ? ` (${ev.branch})` : ''} ` : ''}modelo=${ev.modelo} pasta=${ev.pasta} tarefa="${encurtar(ev.tarefa, 80)}"`;
       break;
     case 'cli_pronta':
       corpo = `session_id=${ev.sessionIdCli} modelo=${ev.modelo} ferramentas=${ev.ferramentas}`;
@@ -57,6 +71,48 @@ export function formatar(ev: Evento): string {
       break;
     case 'erro':
       corpo = ev.mensagem;
+      break;
+    case 'mensagem':
+      corpo = `${ev.de} → ${ev.para}: ${encurtar(ev.texto, 140)}`;
+      break;
+    case 'equipe':
+      corpo = `${ev.motivo}: ${ev.equipe.map((f) => `${f.nome} (${f.cargo})`).join(', ')}`;
+      break;
+    case 'contratacao_pedida':
+      corpo = `[${ev.idPedido}] ${ev.pedidoPor} pede um ${ev.cargo}: ${encurtar(ev.motivo, 100)}`;
+      break;
+    case 'contratacao_respondida':
+      corpo = `[${ev.idPedido}] ${ev.aprovada ? `aprovada: ${ev.contratado}` : 'negada'}`;
+      break;
+    case 'integracao':
+      corpo = `${ev.funcionario}: ${ev.ok ? 'OK' : 'FALHOU'} ${ev.mensagem}`;
+      break;
+    case 'expediente':
+      corpo = `${ev.fase}${ev.luzCaiu ? ' (a luz caiu)' : ''} ${ev.daily ?? ev.resumo ?? ''}`;
+      break;
+    case 'humor':
+      corpo = `${ev.funcionario}: ${ev.humor} (${ev.motivo})`;
+      break;
+    case 'almoco':
+      corpo = ev.ate ? `até ${ev.ate} (${ev.motivo ?? ''})` : 'voltaram do almoço';
+      break;
+    case 'agenda':
+      corpo = `jornal com ${ev.agenda.jornal.length} notícias; falas para ${Object.keys(ev.agenda.falas).length}`;
+      break;
+    case 'aniversario':
+      corpo = ev.funcionario;
+      break;
+    case 'maquina':
+      corpo = `carga ${ev.carga} → ${ev.temperatura}°C`;
+      break;
+    case 'cofre':
+      corpo = `${ev.acao}: ${ev.assunto}`;
+      break;
+    case 'config':
+      corpo = `internet=${ev.internet} aprovarTudo=${ev.aprovarTudo}`;
+      break;
+    case 'tarefa_delegada':
+      corpo = `${ev.de} → ${ev.para}: ${encurtar(ev.tarefa, 120)}`;
       break;
   }
   return `${hora} [${ev.sessao}] ${ICONE[ev.tipo]} ${ev.tipo.padEnd(20)} ${corpo}`;
