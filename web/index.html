@@ -8,7 +8,6 @@
   :root {
     --fundo: #17141c; --painel: #221e29; --painel2: #2b2633; --borda: #3a3344;
     --texto: #ece6f2; --suave: #a39cae; --destaque: #f2b84b; --ok: #5fc27e; --perigo: #e5675f;
-    --opus: #9b6ae0; --sonnet: #4a8ae8; --haiku: #4cbf6a;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--fundo); color: var(--texto);
@@ -18,7 +17,7 @@
     justify-content: center; padding: 16px; gap: 10px; }
   #tela { image-rendering: pixelated; border-radius: 6px; box-shadow: 0 10px 40px #0008; cursor: default; max-width: 100%; }
   #dica { color: var(--suave); font-size: 12px; text-align: center; }
-  aside { width: 360px; flex-shrink: 0; background: var(--painel); border-left: 1px solid var(--borda);
+  aside { width: 380px; flex-shrink: 0; background: var(--painel); border-left: 1px solid var(--borda);
     overflow-y: auto; height: 100vh; position: sticky; top: 0; }
   section { padding: 14px 16px; border-bottom: 1px solid var(--borda); }
   h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
@@ -26,45 +25,84 @@
   .pilula { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--painel2); color: var(--suave); }
   .pilula.on { color: var(--ok); } .pilula.off { color: var(--perigo); }
   #status { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  label { display: block; font-size: 12px; color: var(--suave); margin: 8px 0 3px; }
+  #projetoNome { color: var(--suave); font-size: 12px; margin-top: 4px; word-break: break-all; }
+  label { display: block; font-size: 12px; color: var(--suave); margin: 10px 0 4px; }
   input, select, textarea { width: 100%; background: var(--fundo); color: var(--texto); border: 1px solid var(--borda);
-    border-radius: 6px; padding: 7px 9px; font: inherit; }
-  textarea { min-height: 76px; resize: vertical; }
+    border-radius: 6px; padding: 8px 10px; font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
   .linha { display: flex; gap: 8px; } .linha > * { flex: 1; }
   button { background: var(--destaque); color: #241a05; border: 0; border-radius: 6px; padding: 8px 12px;
     font: inherit; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: .5; cursor: wait; }
   button.neutro { background: var(--painel2); color: var(--texto); border: 1px solid var(--borda); font-weight: 500; }
-  button.perigo { background: var(--perigo); color: #fff; }
-  #delegar button[type=submit] { width: 100%; margin-top: 10px; }
-  .chk { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--suave); }
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--suave); }
   .chk input { width: auto; }
-  #erroForm { color: var(--perigo); font-size: 12px; margin-top: 6px; min-height: 1em; }
+  .erro { color: var(--perigo); font-size: 12px; margin-top: 6px; min-height: 1em; }
+  .vazio { color: var(--suave); font-size: 12px; }
+  .ponto { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+  /* pedidos na sua mesa */
   .pedido { background: var(--painel2); border: 1px solid var(--destaque); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
   .pedido code { display: block; margin: 6px 0 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--suave); }
+  .pedido p { margin: 6px 0 8px; color: var(--suave); font-size: 13px; }
   .pedido .linha button { padding: 6px; }
-  .vazio { color: var(--suave); font-size: 12px; }
+
+  /* conversa com o chefe */
+  #chat { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .msg { padding: 8px 10px; border-radius: 10px; max-width: 92%; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+  .msg .quem { display: block; font-size: 11px; color: var(--suave); margin-bottom: 2px; font-weight: 600; }
+  .msg.dele { background: var(--painel2); align-self: flex-start; border-top-left-radius: 2px; }
+  .msg.minha { background: #3d3320; align-self: flex-end; border-top-right-radius: 2px; }
+  .pensando { color: var(--suave); font-size: 12px; font-style: italic; }
+  #formChefe { display: flex; gap: 8px; align-items: flex-end; }
+  #formChefe textarea { min-height: 44px; }
+
+  /* equipe */
+  .membro { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  .membro:hover, .membro.sel { background: var(--painel2); }
+  .membro .info { flex: 1; min-width: 0; }
+  .membro .nome { font-weight: 600; }
+  .membro .det { font-size: 12px; color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #btnContratar { width: 100%; margin-top: 8px; }
+
+  /* ficha */
+  #ficha .topo { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #ficha .nome { font-weight: 700; font-size: 15px; }
+  #ficha dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; margin: 8px 0; }
+  #ficha dt { color: var(--suave); } #ficha dd { margin: 0; word-break: break-word; }
+  #ficha details { margin: 8px 0; }
+  #ficha summary { cursor: pointer; color: var(--suave); font-size: 12px; }
+  #ficha .feed { max-height: 300px; overflow-y: auto; }
+
+  /* log técnico */
   .feed { font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .feed details { border-bottom: 1px dashed var(--borda); padding: 3px 0; }
   .feed summary { cursor: pointer; list-style: none; word-break: break-word; }
   .feed summary::-webkit-details-marker { display: none; }
   .feed pre { white-space: pre-wrap; word-break: break-all; background: var(--fundo); padding: 6px; border-radius: 4px; margin: 4px 0; color: var(--suave); }
   .hora { color: var(--suave); }
-  .ponto { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-  #ficha .topo { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  #ficha .nome { font-weight: 700; font-size: 15px; }
-  #ficha dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin: 8px 0; }
-  #ficha dt { color: var(--suave); } #ficha dd { margin: 0; word-break: break-all; }
-  #ficha .feed { max-height: 320px; overflow-y: auto; }
-  #atividade .feed { max-height: 260px; overflow-y: auto; }
-  #login { position: fixed; inset: 0; background: #17141cf2; display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
-  #login[hidden] { display: none; }
-  #login .cartao { background: var(--painel); border: 1px solid var(--borda); border-radius: 12px; padding: 24px; max-width: 440px; width: 100%; }
-  #login h1 { font-size: 20px; margin-bottom: 8px; }
-  #login p { color: var(--suave); margin: 8px 0; }
-  #login button { width: 100%; margin-top: 12px; padding: 11px; }
-  #login a { color: var(--destaque); word-break: break-all; }
-  #loginErro { color: var(--perigo); font-size: 13px; min-height: 1em; margin-top: 8px; }
+  #atividade > details > summary { cursor: pointer; color: var(--suave); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  #atividade .feed { max-height: 260px; overflow-y: auto; margin-top: 8px; }
+
+  /* janelas sobrepostas */
+  .sobre { position: fixed; inset: 0; background: #17141cee; display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .sobre[hidden] { display: none; }
+  .cartao { background: var(--painel); border: 1px solid var(--borda); border-radius: 12px; padding: 24px; max-width: 460px; width: 100%; max-height: 92vh; overflow-y: auto; }
+  .cartao h1 { font-size: 20px; margin-bottom: 8px; }
+  .cartao p { color: var(--suave); margin: 8px 0; }
+  .cartao .grande { width: 100%; margin-top: 14px; padding: 11px; }
+  .cartao a { color: var(--destaque); word-break: break-all; }
+  .conta { background: var(--painel2); border-radius: 8px; padding: 10px 12px; margin: 12px 0 0; }
+  #contratacao .cartao { max-width: 720px; }
+  .abas { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
+  .abas button { flex: 1; }
+  .abas button.ativa { outline: 2px solid var(--destaque); }
+  .verdade { font-size: 13px; color: var(--suave); margin-bottom: 10px; }
+  .candidatos { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .candidato { background: var(--painel2); border: 1px solid var(--borda); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .candidato canvas { image-rendering: pixelated; width: 48px; height: 64px; }
+  .candidato .nome { font-weight: 700; font-size: 15px; }
+  .candidato .pers { font-size: 13px; color: var(--suave); flex: 1; }
   @media (max-width: 860px) {
     body { flex-direction: column; }
     aside { width: 100%; height: auto; position: static; border-left: 0; border-top: 1px solid var(--borda); }
@@ -75,11 +113,12 @@
 <body>
 <main id="palco">
   <canvas id="tela" width="384" height="224" aria-label="Escritório"></canvas>
-  <div id="dica">Clique num funcionário para ver o que ele está fazendo e o log técnico.</div>
+  <div id="dica">Clique em alguém para ver o que está fazendo.</div>
 </main>
 <aside>
   <section>
     <h1>🏢 Escritório Pixel</h1>
+    <div id="projetoNome"></div>
     <div id="status">
       <span class="pilula" id="conexao">conectando…</span>
       <span class="pilula" id="trabalhando">0 trabalhando</span>
@@ -87,60 +126,93 @@
     </div>
   </section>
 
-  <section id="secPedidos">
+  <section id="secPedidos" hidden>
     <h2>Pedidos na sua mesa</h2>
-    <div id="pedidos"><div class="vazio">Ninguém esperando por você.</div></div>
+    <div id="pedidos"></div>
   </section>
 
   <section>
-    <h2>Delegar tarefa</h2>
-    <form id="delegar">
-      <label for="fNome">Funcionário</label>
-      <input id="fNome" list="nomes" placeholder="ex.: ana" required autocomplete="off">
-      <datalist id="nomes"></datalist>
-      <div class="linha">
-        <div>
-          <label for="fModelo">Cargo</label>
-          <select id="fModelo">
-            <option value="haiku">Júnior (Haiku)</option>
-            <option value="sonnet" selected>Pleno (Sonnet)</option>
-            <option value="opus">Sênior (Opus)</option>
-          </select>
-        </div>
-      </div>
-      <label for="fTarefa">Tarefa</label>
-      <textarea id="fTarefa" required placeholder="ex.: crie uma página HTML de lista de tarefas com testes"></textarea>
-      <label for="fProjeto">Projeto (pasta)</label>
-      <input id="fProjeto" required autocomplete="off">
-      <button type="submit">Delegar</button>
-      <div id="erroForm"></div>
-      <label class="chk"><input type="checkbox" id="fAuto"> Aprovar pedidos automaticamente (nunca fora da pasta do projeto)</label>
+    <h2 id="tituloChat">Conversa com o chefe</h2>
+    <div id="chat"></div>
+    <form id="formChefe">
+      <textarea id="fMsg" placeholder="Fale com o chefe… (Enter envia)" required></textarea>
+      <button type="submit">Enviar</button>
     </form>
+    <div class="erro" id="erroChat"></div>
+  </section>
+
+  <section>
+    <h2>Equipe</h2>
+    <div id="equipe"></div>
+    <button class="neutro" id="btnContratar">+ Contratar alguém</button>
   </section>
 
   <section id="ficha" hidden></section>
 
   <section id="atividade">
-    <h2>Atividade</h2>
-    <div class="feed" id="feed"></div>
+    <details>
+      <summary>Bastidores (log técnico)</summary>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="fAuto"> Aprovar pedidos de permissão automaticamente (nunca fora da pasta do projeto)</label>
+      <div class="feed" id="feed"></div>
+    </details>
   </section>
 </aside>
-<div id="login" hidden>
+
+<!-- primeira abertura -->
+<div id="boasvindas" class="sobre" hidden>
   <div class="cartao">
-    <h1>🏢 Bem-vindo ao seu escritório</h1>
-    <p>Seus funcionários trabalham com a sua conta Claude (assinatura Pro ou Max). Entre uma vez e pronto.</p>
-    <div id="loginPasso1">
-      <button id="btnEntrar">Entrar com a conta Claude</button>
+    <div id="bvConta">
+      <h1>🏢 Bem-vindo ao seu escritório</h1>
+      <p>Aqui você é o gestor. Seus funcionários de IA trabalham de verdade, usando a sua conta Claude (assinatura Pro ou Max).</p>
+      <div id="bvVerificando" class="vazio">Verificando sua conta…</div>
+      <div id="bvLogado" hidden>
+        <div class="conta">✅ Conta Claude conectada<span id="bvEmail"></span></div>
+        <button class="grande" id="bvContinuar">Continuar com esta conta</button>
+        <button class="grande neutro" id="bvOutra">Usar outra conta</button>
+      </div>
+      <div id="bvEntrar" hidden>
+        <button class="grande" id="btnEntrar">Entrar com a conta Claude</button>
+      </div>
+      <div id="bvCodigo" hidden>
+        <p>Abrimos o login no seu navegador. Se ele não abriu, <a id="loginLink" href="#" target="_blank" rel="noopener">clique aqui</a>.</p>
+        <p>Se o site mostrar um código, cole aqui:</p>
+        <form id="formCodigo">
+          <input id="fCodigo" autocomplete="off" placeholder="código">
+          <button class="grande" type="submit">Confirmar</button>
+        </form>
+      </div>
+      <div class="erro" id="loginErro"></div>
     </div>
-    <div id="loginPasso2" hidden>
-      <p>Abrimos o login no seu navegador. Se ele não abriu, <a id="loginLink" href="#" target="_blank" rel="noopener">clique aqui</a>.</p>
-      <p>Se o site mostrar um código, cole aqui:</p>
-      <form id="formCodigo">
-        <input id="fCodigo" autocomplete="off" placeholder="código">
-        <button type="submit">Confirmar</button>
-      </form>
+    <form id="bvProjeto" hidden>
+      <h1>Seu primeiro projeto</h1>
+      <p>O que o escritório vai construir? Pode ser um app, um site, um texto, uma pesquisa… Dá para mudar depois conversando com o chefe.</p>
+      <label for="pNome">Nome do projeto</label>
+      <input id="pNome" required value="Meu primeiro projeto" autocomplete="off">
+      <label for="pDesc">Em uma frase, o que é (opcional)</label>
+      <textarea id="pDesc" placeholder="ex.: um site de receitas da minha avó"></textarea>
+      <details style="margin-top:10px">
+        <summary class="vazio" style="cursor:pointer">Avançado: usar uma pasta que já existe</summary>
+        <label for="pPasta">Pasta (vazia ou um repositório git)</label>
+        <input id="pPasta" autocomplete="off" placeholder="~/escritorio-projetos/<nome do projeto>">
+      </details>
+      <button class="grande" type="submit">Abrir o escritório</button>
+      <div class="erro" id="bvErro"></div>
+    </form>
+  </div>
+</div>
+
+<!-- contratação -->
+<div id="contratacao" class="sobre" hidden>
+  <div class="cartao">
+    <div class="linha" style="align-items:center"><h1 style="flex:3">Contratar</h1><button class="neutro" id="fecharContratacao" style="flex:0">fechar</button></div>
+    <div class="abas" id="abas">
+      <button class="neutro" data-cargo="junior">Júnior</button>
+      <button class="neutro" data-cargo="pleno">Pleno</button>
+      <button class="neutro" data-cargo="senior">Sênior</button>
     </div>
-    <div id="loginErro"></div>
+    <div class="verdade" id="verdade"></div>
+    <div class="candidatos" id="candidatos"></div>
+    <div class="erro" id="erroContratar"></div>
   </div>
 </div>
 <script type="module" src="jogo.js"></script>

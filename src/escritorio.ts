@@ -107,6 +107,42 @@ export class Escritorio {
     return mesas;
   }
 
+  // Branch principal do projeto (a que está no repositório principal).
+  principal(): string {
+    return git(this.projeto, 'rev-parse', '--abbrev-ref', 'HEAD');
+  }
+
+  // Antes de uma tarefa: a mesa recebe o que já foi integrado na principal,
+  // para o funcionário partir do trabalho mais recente da equipe.
+  atualizarMesa(m: Mesa): { ok: boolean; mensagem: string } {
+    if (git(m.pasta, 'status', '--porcelain')) return { ok: false, mensagem: 'mesa com alterações não salvas; segue sem atualizar' };
+    try {
+      git(m.pasta, 'merge', '--no-edit', '-q', this.principal());
+      return { ok: true, mensagem: 'mesa atualizada' };
+    } catch (e) {
+      tenta(() => git(m.pasta, 'merge', '--abort'));
+      return { ok: false, mensagem: `conflito ao atualizar a mesa: ${(e as Error).message.split('\n')[0]}` };
+    }
+  }
+
+  // Depois de uma tarefa: o trabalho da mesa entra na principal (merge com
+  // commit próprio, então dá para desfazer). Em conflito, nada muda.
+  integrar(m: Mesa, quem: string): { ok: boolean; mensagem: string; commits: number } {
+    const principal = this.principal();
+    const commits = Number(git(this.projeto, 'rev-list', '--count', `${principal}..${m.branch}`));
+    if (commits === 0) return { ok: true, mensagem: 'nada novo para integrar', commits };
+    if (git(this.projeto, 'status', '--porcelain')) {
+      return { ok: false, mensagem: `a pasta principal (${this.projeto}) tem alterações não salvas`, commits };
+    }
+    try {
+      git(this.projeto, 'merge', '--no-ff', '-q', '-m', `Integra o trabalho de ${quem} (${m.branch})`, m.branch);
+      return { ok: true, mensagem: `${commits} commit(s) integrados em ${principal}`, commits };
+    } catch (e) {
+      tenta(() => git(this.projeto, 'merge', '--abort'));
+      return { ok: false, mensagem: `conflito ao integrar ${m.branch}; nada foi alterado`, commits };
+    }
+  }
+
   // Instruções anexadas ao system prompt de quem trabalha numa mesa.
   instrucoes(m: Mesa): string {
     return [

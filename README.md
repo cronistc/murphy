@@ -11,7 +11,13 @@ Um escritório em pixel art onde funcionários de IA trabalham de verdade: por t
    ```bash
    sudo dnf install ./escritorio-pixel-*.x86_64.rpm
    ```
-3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez, clique em **Entrar com a conta Claude** (assinatura Pro ou Max).
+3. Abra **Escritório Pixel** no menu de aplicativos. Na primeira vez: confirme a conta Claude (assinatura Pro ou Max), dê nome ao primeiro projeto, e o chefe chega.
+
+## Como funciona
+
+Você é o gestor. Converse com o **chefe** (Opus) no painel: diga o que quer construir. Ele planeja, distribui o trabalho e, se faltar gente, **pede para contratar** (o pedido aparece em "Pedidos na sua mesa"). Você também pode contratar quando quiser em **+ Contratar alguém**: júnior (rápido e barato), pleno (equilíbrio) ou sênior (o mais capaz).
+
+Cada funcionário trabalha numa cópia própria do projeto; ao terminar, o trabalho entra na versão principal e o chefe revisa e te conta, com a evidência de quem fez. Clique em alguém para ver o que está fazendo e o log técnico.
 
 O pacote já traz o Claude Code; o `dnf` instala o resto (Node.js, git, GTK, WebKit). Fechar a janela desliga o escritório e os funcionários. Os projetos ficam em `~/escritorio-projetos`; o log do cérebro em `~/.local/share/escritorio-pixel/`.
 
