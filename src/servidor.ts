@@ -10,6 +10,9 @@
 //   POST /permissoes/:id      {"aprovar": true, "motivo": "ok"}
 //   GET  /config              {"projetoPadrao", "aprovarTudo"}
 //   POST /config              {"aprovarTudo": true}  (aprova também os pedidos pendentes)
+//   GET  /conta               {"logado": bool}  login do usuário na conta Claude
+//   POST /conta/entrar        inicia o login oficial; devolve {"url"} (o navegador abre sozinho)
+//   POST /conta/codigo        {"codigo": "..."} cola o código mostrado pelo site
 //   GET  /                    a tela do escritório (pasta web/)
 
 import http from 'node:http';
@@ -20,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { Sessao, type Decisao, type PedidoPermissao } from './sessao.ts';
 import { registrar } from './log.ts';
 import { Escritorio, slug } from './escritorio.ts';
+import * as conta from './conta.ts';
 import type { Evento } from './eventos.ts';
 
 const PORTA = Number(process.env.PORTA ?? 4317);
@@ -144,6 +148,14 @@ const servidor = http.createServer(async (req, res) => {
       p.responder({ aprovada: Boolean(aprovar), motivo: motivo ?? (aprovar ? 'aprovado pelo usuário' : 'negado pelo usuário') });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && url.pathname === '/conta') return json(res, 200, await conta.status());
+    if (req.method === 'POST' && url.pathname === '/conta/entrar') return json(res, 200, await conta.iniciarLogin());
+    if (req.method === 'POST' && url.pathname === '/conta/codigo') {
+      const { codigo } = await lerJson(req);
+      if (!codigo) return json(res, 400, { erro: 'informe o código' });
+      const r = await conta.enviarCodigo(String(codigo));
+      return json(res, 200, { ...r, ...(await conta.status()) });
+    }
     if (req.method === 'GET' && url.pathname === '/config') {
       return json(res, 200, { projetoPadrao: PROJETO_PADRAO, aprovarTudo });
     }
@@ -171,6 +183,16 @@ const servidor = http.createServer(async (req, res) => {
     json(res, 400, { erro: e instanceof Error ? e.message : String(e) });
   }
 });
+
+// Ao fechar o app, o login em andamento e as sessões não ficam órfãos.
+for (const sinal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(sinal, () => {
+    conta.cancelarLogin();
+    for (const { sessao } of sessoes.values()) sessao.parar();
+    servidor.close();
+    setTimeout(() => process.exit(0), 500).unref();
+  });
+}
 
 servidor.listen(PORTA, '127.0.0.1', () => {
   console.log(`🧠 cérebro ouvindo. Abra o escritório em http://127.0.0.1:${PORTA}`);

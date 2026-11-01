@@ -1,6 +1,6 @@
 {
   "name": "escritorio-pixel",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,7 +9,8 @@
     "demo": "node src/demo.ts",
     "checar": "tsc --noEmit",
     "demo:equipe": "node src/demo-equipe.ts",
-    "start": "node src/servidor.ts"
+    "start": "node src/servidor.ts",
+    "rpm": "empacotar/construir-rpm.sh"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "esbuild": "^0.25.12",
     "typescript": "^7.0.2"
   },
   "engines": {
